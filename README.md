@@ -22,11 +22,11 @@ ___________                                .__               __
 
 Live Forensicator is part of the Black Widow Toolbox, it aims to assist Forensic Investigators and Incident responders in carrying out a quick live forensic investigation.
 <p>It achieves this by gathering different system information for further review for anomalous behavior or unexpected data entry, it also looks out for unusual files or activities and points it out to the investigator.</p>
-<p>It is paramount to note that these scripts have no inbuilt intelligence it's left for the investigator to analyze the output and decide on a conclusion or conduct a deeper investigation.</p>
 
 # 🖳 Forensicator For WINDOWS
 <p>The windows version of Forensicator is written in Powershell.</p>
 <p> Forensicator for Windows has added the ability to analyze Event Logs, it queries the event logs for certain log IDs that might point to unusual activity or compromise. </p>
+<p> Sigma Rules has been added as well. </p>
 
 [Check out Forensicator for Windows](https://github.com/Johnng007/Live-Forensicator/tree/main/Windows)
 
@@ -54,21 +54,21 @@ Live Forensicator is part of the Black Widow Toolbox, it aims to assist Forensic
 
 * Forensicator results are output in nice-looking html files with an index file. You can find all extracted Artifacts in the script's working directory.
 
-* <p>Forensicator Can Search through all the folders within a system looking for files with similar extensions as well-known Ransomware, Albeit this     search can take a long time, but is helpful if the Alert you received is related to a Ransomware attack</p>
+* <p>Forensicator Stays up to date with Malware signatures, randomware antics, signma rules..etc during script execution Forensicator may attempt to update these files from their sources on the web. </p>
 
-* <p>Forensicator can capture network traffic, this is useful when your investigation has to do with assets communicating with known malicious IPs,       this way you can parse the pcapng file to Wireshark and examine for C&C servers.</p>
+* <p>Feel free to make adjustments in the `config.json` file as required in your investigation</p>
 
 * <p>Sometimes it may be paramount to maintain the integrity of the Artifacts, where lawyers may argue that they might have been compromised on transit to your lab.
-  Forensicator can encrypt the Artifact with a unique randomly generated key using the AES algorithm, you can specify this by using the -ENCRYPTED parameter. You can   decrypt it at will anywhere anytime even with another copy of Forensicator, just keep your key safe. This task is performed by the FileCryptography.psm1 file
+  Forensicator can encrypt the Artifact with a unique randomly generated key using the AES algorithm, you can specify this by using the -ENCRYPTED parameter. You can   decrypt it at will anywhere anytime even with another copy of Forensicator (not backward compatible from v4.1.1).
   
   > #### NOTE: 
   > This feature is only currently available in the Windows Module..
   
   </p>
 
-* <p>In the Windows module Forensictor looks out for suspicious activities within the Event Log, it has a long list of malicious executables, and PowerShell commands which it queries the event log against.</p>
+* <p>Forensictor looks out for suspicious activities within the Event Log, it uses several approaches including Sigma Rules.</p>
 
-* <p>In the Windows module Forensictor Matches hashes of executables within the system to malicious hash databases for malware detection, Also browsing history URLs are matched against a list of latest URLs from IOCs for detection.</p>
+* <p>Forensictor Matches hashes of executables within the system to malicious hash databases for malware detection, Also browsing history URLs are matched against a list of latest URLs from IOCs for detection.</p>
 
 
 ## Screenshot
@@ -83,10 +83,14 @@ Live Forensicator is part of the Black Widow Toolbox, it aims to assist Forensic
 [See Wiki](https://github.com/Johnng007/Live-Forensicator/wiki/Changelog) For full Changelog.
 ```bash
 
-Windows: v4.0.2 07/08/2024
-1. Windows: Added hash check for malware detection.
-2. Windows: Minor Bug Fixes.
-3. Windows: Added a notification when Forensicator is not running as admin.
+Windows: v4.1.1 23/03/2026
+1. Windows: NEW: Sigma Rules.
+2. Windows: NEW: latest hash fetching from abuse.ch .
+3. Windows: NEW: Robust Script execution logging.
+4. Windows: NEW: Collects Bitlocker key
+5. Windows: IMPROVED: Encryption & Decryption functions.
+6. Windows: IMPROVED: Browser History extraction & malicious URL check.
+7. Windows: IMPROVED: Switched to modern supported commands.
 
 ```
 
