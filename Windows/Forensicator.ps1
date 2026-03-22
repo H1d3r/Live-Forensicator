@@ -11554,7 +11554,11 @@ Write-ForensicLog "Done - Happy Investigation" -Level SUCCESS -Section "CORE"
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 #endregion
+=======
+#endregion
+>>>>>>> 742e95de46b078424489b2dc2bc9b7a43d18f575
 =======
 #endregion
 >>>>>>> 742e95de46b078424489b2dc2bc9b7a43d18f575
