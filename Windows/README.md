@@ -21,9 +21,9 @@ ___________                                .__               __
 # 🤔 ABOUT
 
 Live Forensicator is part of the Black Widow Toolbox, it aims to assist Forensic Investigators and Incident responders in carrying out a quick live forensic investigation.
-<p>It achieves this by gathering different system information for further review for anomalous behavior or unexpected data entry, it also looks out for unusual files or activities and points it out to the investigator.</p>
-<p> **The latest version now analyzes Event Logs, it queries the event logs for certain log IDs that might point to an unusual activity or compromise. </p>
-<p>It is paramount to note that this script has no inbuilt intelligence it is left for the investigator to analyze the output and decide on a conclusion or conduct a deeper investigation.</p>
+<p>The windows version of Forensicator is written in Powershell.</p>
+<p> Forensicator for Windows has added the ability to analyze Event Logs, it queries the event logs for certain log IDs that might point to unusual activity or compromise. </p>
+<p> Sigma Rules has been added as well. </p>
 
 
 ```
@@ -36,9 +36,7 @@ But Forensicator can work without these dependencies, they help with additional 
 ```
 ```
 winpmem_mini_x64_rc2.exe   For taking RAM capture (https://github.com/Velocidex/WinPmem)
-BrowsingHistoryView64.exe  For a more robust Browsing History View (http://www.nirsoft.net/utils/browsing_history_view.html)
 etl2pcapng64.exe           For converting network trace to pcap
-FileCryptography.psm1      For Encrypting the Artifacts
 ```
 ```
 ## 🎫 Other Dependencies
@@ -47,7 +45,8 @@ There are other files within the Forensicator-Share folder that this script depe
 ```
 malicious_URLs.txt          This file contains a list of malicious URLs used by the Forensicator
                             to match Browsing History to malicious domains. 
-sqlite3.exe                 Assists with extracting Browser History. 
+sqlite3.exe                 Assists with extracting Browser History.
+\sigma-rules\               Sigma Rules
 ```
 
 ## 🔨 Usage
@@ -58,12 +57,6 @@ git clone https://github.com/Johnng007/Live-Forensicator.git
 
 # Execution
 .\Forensicator.ps1 <parameters>
-
-# Windows Binary
-.\Forensicator.exe <parameters>
-
-NOTE: You can just double-click the exe to run the default checks
-      The Forensicator-Share is parked into the EXE which will self-extract on run.
 
 ```
 
@@ -87,9 +80,6 @@ NOTE: You can just double-click the exe to run the default checks
 
 # Extract Event Logs alongside Basic Usage
 .\Forensicator.ps1 -EVTX EVTX
-
-# Use the Nirsoft Browser History View to Capture Browser History
-.\Forensicator.ps1 -BROWSER BROWSER
 
 #Grab weblogs IIS & Apache
 .\Forensicator.ps1 -WEBLOGS WEBLOGS
@@ -127,20 +117,20 @@ NOTE: You can just double-click the exe to run the default checks
 ```
 
 ## ✍ Notes
-* Run the script as an administrator to get value.<br>
+* Run the scripts as a privileged user to get value.<br>
 
 * Forensicator Activities may be flagged by IDS or IPS Solutions so take note.<br>
 
-* The results are output in nice-looking html files with an index file, You can find all extracted Artifacts in the script's working directory.
+* Forensicator results are output in nice-looking html files with an index file. You can find all extracted Artifacts in the script's working directory.
 
-* <p>Forensicator Can Search through all the folders within a system looking for files with similar extensions as well-known Ransomware, this     search takes a long but is helpful if the Alert you received is related to a Ransomware attack, Use the -RANSOMWARE Parameter to invoke this.</p>
+* <p>Forensicator Stays up to date with Malware signatures, randomware antics, signma rules..etc during script execution Forensicator may attempt to update these files from their sources on the web. </p>
 
-* <p>Forensictor can capture network traffic using netsh trace, this is useful when your investigation has to do with assets communicating with known malicious IPs,       this way you can parse the pcapng file to Wireshark and examine for C&C servers. By default, I set the capture to take 120secs</p>
+* <p>Feel free to make adjustments in the `config.json` file as required in your investigation</p>
 
-* <p>Sometimes it may be paramount to maintain the integrity of the Artifacts, where lawyers may argue that they might have been compromised in transit to your lab.
-  Forensicator can now encrypt the Artifact with a unique randomly generated key using the AES algorithm, you can specify this by using the -ENCRYPTED parameter. You can   decrypt it at will anywhere anytime even with another copy of Forensicator, just keep your key safe. This task is performed by the FileCryptography.psm1 file</p>
+* <p>Sometimes it may be paramount to maintain the integrity of the Artifacts, where lawyers may argue that they might have been compromised on transit to your lab.
+  Forensicator can encrypt the Artifact with a unique randomly generated key using the AES algorithm, you can specify this by using the -ENCRYPTED parameter. You can   decrypt it at will anywhere anytime even with another copy of Forensicator (not backward compatible from v4.1.1).
 
-* <p>Forensictor looks out for suspicious activities within the Event Log, it has a long list of malicious executables, and PowerShell commands which it queries the event log against.</p>
+* <p>Forensictor looks out for suspicious activities within the Event Log, it uses several approaches including Sigma Rules.</p>
 
 - Forensictor extracts Browsing History from Chrome, Mozilla, Edge, and IE, this browsing history is further passed through a list of malicious URLs for detection - [See More In Wiki](https://github.com/Johnng007/Live-Forensicator/wiki/Usage-%E2%80%90-Windows#-malicious-web-traffic-analysis).
   
@@ -238,6 +228,7 @@ NOTE: You can just double-click the exe to run the default checks
     11. EXECUATBLES IN TEMP
     12. EXECUTABLES IN PERFLOGS
     13. EXECUTABLES IN THE DOCUMENTS FOLDER
+    14. BITLOCKER ENCRYPTION KEY
 
    =========================================
       OTHER FORENSICATOR EXTRA CHECKS
@@ -258,13 +249,21 @@ NOTE: You can just double-click the exe to run the default checks
 ```
 
 
-## Screenshot
-<img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_Output.png?raw=true" alt="Forensicator"  /> <br>
-## HTML Output
+
+## Screenshots
+<details> <summary> Terminal </summary>
+
+<img width="765" height="1127" alt="image" src="https://github.com/user-attachments/assets/8e49146b-a1e4-4c28-8057-6071903baf75" />
+
+</details>
+
+<details> <summary> Dashboard </summary>
 <img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML1.png?raw=true" alt="Forensicator"  /> <br>
-<img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML2.png?raw=true" alt="Forensicator"  /> <br>
+<img width="1165" height="1037" alt="image" src="https://github.com/user-attachments/assets/7a82d7a4-eac9-4c4c-8b12-193d77ed7640" /> <br>
 <img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML3.png?raw=true" alt="Forensicator"  /> <br>
 <br></br>
+
+</details>
 
 ## Contributing
 Just to let you know, pull requests are welcome. For major changes, please open an issue first to talk about what you would like to change or add.
