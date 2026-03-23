@@ -71,14 +71,13 @@ Live Forensicator is part of the Black Widow Toolbox, it aims to assist Forensic
 * <p>Forensictor Matches hashes of executables within the system to malicious hash databases for malware detection, Also browsing history URLs are matched against a list of latest URLs from IOCs for detection.</p>
 
 
-## Screenshot
+## Screenshots
 <details> <summary> Terminal </summary>
 
 <img width="765" height="1127" alt="image" src="https://github.com/user-attachments/assets/8e49146b-a1e4-4c28-8057-6071903baf75" />
 
 </details>
 
-## HTML Output
 <details> <summary> Dashboard </summary>
 <img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML1.png?raw=true" alt="Forensicator"  /> <br>
 <img width="1165" height="1037" alt="image" src="https://github.com/user-attachments/assets/7a82d7a4-eac9-4c4c-8b12-193d77ed7640" /> <br>
