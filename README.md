@@ -174,7 +174,7 @@ Linux v4.1.1 (31/03/2026)
 
 - IMPROVED: Fixed some carriage return errors.
 - NEW: Added malicious executable check.
-- NEW: Added malicious chell commands check.
+- NEW: Added malicious shell commands check.
 ```
 
 ---
