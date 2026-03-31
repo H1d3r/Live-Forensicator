@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Live Forensicator Bash Script
-# Part of the Black Widow Tools
 # Coded by Ebuka John Onyejegbu
 
 # Defining parameters
@@ -15,8 +14,8 @@ usage() {
     echo "  -t, --timeline        Incident timeline helpful when extracting logs"
     echo "  -log, --logfiles      Log filenames to search through"
     echo "  -logdir, --logdir     Log directory to search through"
-    echo "  -e, --encrypt         Encrypts the Forensicator extracted artifacts"
-    echo "  -d, --decrypt         Decrypts and encrypted Forensicator artifact"
+   # echo "  -e, --encrypt         Encrypts the Forensicator extracted artifacts"
+   # echo "  -d, --decrypt         Decrypts and encrypted Forensicator artifact"
     echo "  -u, --usage           Shows the tool usage"
     echo "  -z, --update          Updates your copy of Forensicator"
     echo "  -name, --name         Supply Investigator name as a flag"
