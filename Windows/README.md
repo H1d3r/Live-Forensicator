@@ -55,7 +55,6 @@ etl2pcapng64.exe           → Convert network trace to PCAPNG
 # 📁 Additional Resources
 
 ```bash
-malicious_URLs.txt     → IOC list for browser history analysis
 sqlite3.exe            → Browser history extraction
 sigma-rules/           → Detection rules (Sigma)
 ```
