@@ -47,6 +47,8 @@ Forensicator:
 * Malware hash matching (e.g., abuse.ch feeds)
 * Browser history analysis with IOC matching
 * Optional artifact encryption (AES)
+* Detection Insight - A summary of the detection, why the detection matters, the detection logic code, what to look pout for in the detection and the Mitre Mapping.
+* Forensicator AI - This is aimed to give you tailored insight on the detection (Coming Soon!!!)
 
 👉 https://github.com/Johnng007/Live-Forensicator/tree/main/Windows
 
@@ -82,6 +84,8 @@ Forensicator:
 * Malware hash and IOC matching
 * Structured HTML reporting (with dashboards)
 * Optional artifact encryption (Windows module)
+* Detection Insight with Mitre Mapping
+* Forensicator AI (Coming Soon!!!)
 
 ---
 
@@ -92,6 +96,7 @@ Forensicator generates:
 * Clean, structured HTML reports
 * Indexed findings for easy navigation
 * Extracted artifacts stored locally
+* Detection insight into each finding.
 
 This enables fast transition from **data collection → investigation → decision-making**.
 
@@ -149,6 +154,12 @@ Forensicator identifies suspicious activity through:
 <img width="1165" height="1037" src="https://github.com/user-attachments/assets/7a82d7a4-eac9-4c4c-8b12-193d77ed7640" />
 <br>
 <img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML3.png?raw=true" />
+<br>
+<img width="1061" height="933" alt="image" src="https://github.com/user-attachments/assets/3e247456-f406-489f-b240-6acd992c8743" />
+<br>
+<img width="1060" height="939" alt="image" src="https://github.com/user-attachments/assets/7897da4b-af8c-445c-aac4-0b1cbf76de72" />
+
+
 
 </details>
 
@@ -160,6 +171,11 @@ Full changelog:
 👉 https://github.com/Johnng007/Live-Forensicator/wiki/Changelog
 
 ```bash
+Windows: v4.1.2 (13/04/2026)
+- NEW: Added Forensicator Insights with Mitre Mapping.
+- IMPROVED: Sigma Rule Support.
+- IMPROVED: Script Readability.
+
 Windows: v4.1.1 (23/03/2026)
 
 - NEW: Sigma rule support
