@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Live Forensicator Bash Script
-# Part of the Black Widow Tools
 # Coded by Ebuka John Onyejegbu
 
 # Defining parameters
@@ -11,12 +10,12 @@ usage() {
     echo "  -r, --ram             Extract the system RAM"
     echo "  -s, --ransom          Check filesystem for ransomware encrypted files"
     echo "  -w, --weblogs         Collect Webserver logs"
-    echo "  -b, --browser         Collects browsing history"
+    echo "  -b, --browser         Collect browsing history"
     echo "  -t, --timeline        Incident timeline helpful when extracting logs"
     echo "  -log, --logfiles      Log filenames to search through"
     echo "  -logdir, --logdir     Log directory to search through"
-    echo "  -e, --encrypt         Encrypts the Forensicator extracted artifacts"
-    echo "  -d, --decrypt         Decrypts and encrypted Forensicator artifact"
+ #   echo "  -e, --encrypt         Encrypts the Forensicator extracted artifacts"
+ #   echo "  -d, --decrypt         Decrypts and encrypted Forensicator artifact"
     echo "  -u, --usage           Shows the tool usage"
     echo "  -z, --update          Updates your copy of Forensicator"
     echo "  -name, --name         Supply Investigator name as a flag"
@@ -60,6 +59,75 @@ green() {
 # print messages in dark cyan color
 cyan() {
     echo -e "\e[36m$@\e[0m"
+}
+
+# Read a simple string array from config.json without adding a jq dependency.
+read_config_array() {
+    local key="$1"
+    local json_file="./config.json"
+
+    if [[ ! -f "$json_file" ]]; then
+        return 1
+    fi
+
+    awk -v key="$key" '
+        $0 ~ "\"" key "\"[[:space:]]*:[[:space:]]*\\[" { in_array=1; next }
+        in_array && /\]/ { exit }
+        in_array {
+            while (match($0, /"([^"]+)"/)) {
+                print substr($0, RSTART + 1, RLENGTH - 2)
+                $0 = substr($0, RSTART + RLENGTH)
+            }
+        }
+    ' "$json_file"
+}
+
+# Prefer the first config array key that exists and has values.
+read_first_available_config_array() {
+    local key
+    local values
+
+    for key in "$@"; do
+        values=$(read_config_array "$key")
+        if [[ -n "$values" ]]; then
+            printf '%s\n' "$values"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# Search captured content for IOC matches and write normalized hits to disk.
+write_ioc_matches() {
+    local key_spec="$1"
+    local output_file="$2"
+    shift 2
+    local sources=("$@")
+    local indicator
+    local source_name
+    local source_data
+    local match_found
+
+    : >"$output_file"
+
+    while IFS= read -r indicator; do
+        [[ -z "$indicator" ]] && continue
+        for source_name in "${sources[@]}"; do
+            source_data="${!source_name}"
+            [[ -z "$source_data" ]] && continue
+            while IFS= read -r line; do
+                printf '%s|%s|%s\n' "$indicator" "$source_name" "$line" >>"$output_file"
+                match_found=1
+            done < <(printf '%s\n' "$source_data" | grep -iF -- "$indicator")
+        done
+    done < <(IFS='|' read -r -a keys <<< "$key_spec"; read_first_available_config_array "${keys[@]}")
+
+    if [[ -z "$match_found" ]]; then
+        echo "No matches found" >"$output_file"
+    else
+        sort -u "$output_file" -o "$output_file"
+    fi
 }
 
 
@@ -119,7 +187,7 @@ CheckForUpdates() {
     if [[ $MyVersion < $remoteVersion ]]; then
         cyan "[!] A new version $remoteVersion is available on GitHub. Please upgrade your copy of Forensicator."
     else
-        green "[!] You are using the latest version $localVersion. No updates available."
+        green "[!] You are using the latest version $MyVersion. No updates available."
     fi
 }
 
@@ -154,7 +222,7 @@ ram() {
 # Function to collect webserver logs
 weblogs() {
     mkdir $(hostname)/WEBLOGS
-    cyan "Checking the existance of Apache logs..."
+    cyan "Checking the existence of Apache logs..."
     # Example to calculate days difference
     #START_DATE="2024-06-01"
     TODAY=$(date +%s)  # Get today's date in seconds since epoch
@@ -171,7 +239,7 @@ weblogs() {
     find "$apache_logs_dir" -type f -name "*.log" -mtime -$DAYS_DIFF -exec cp {} "$(hostname)/WEBLOGS" \;
     green "Apache logs extracted and copied"
 
-    cyan "Checking the existance of NGINX logs..."
+    cyan "Checking the existence of NGINX logs..."
     nginx_logs_dir=$(nginx -V 2>&1 | grep -oP '(?<=--error-log-path=)\S+' | xargs dirname)
     if [[ -z "$nginx_logs_dir" ]]; then
         cyan "Looks like there are no NGINX webservers"
@@ -231,12 +299,12 @@ ransom() {
 
     mkdir -p $(hostname)/RANSOM_MALICIOUS
 
-    cyan "[*] checking Ramsomware encrypted files.."
+    cyan "[*] Checking ransomware-encrypted files.."
     cyan "[*] This may take a while.."
     # Function to search for files with given extensions
     search_files() {
-        local Ransomeware_Extensions=("$@")
-        for ext in "${Ransomeware_Extensions[@]}"; do
+        local Ransomware_Extensions=("$@")
+        for ext in "${Ransomware_Extensions[@]}"; do
             find / -type f -name "*$ext" 2>/dev/null
         done
     }
@@ -249,15 +317,40 @@ ransom() {
     fi
 
     # Read the file extensions from the JSON file
-    Ransomeware_Extensions=($(grep -o '"\.[^"]*"' "$json_file" | tr -d '"'))
+    Ransomware_Extensions=($(grep -o '"\.[^"]*"' "$json_file" | tr -d '"'))
 
     # Define the output directory and file
 
     # Search for files with the specified extensions and output to a text file
     # echo "Searching for files with extensions similar to ransomware encrypted files..."
-    search_files "${Ransomeware_Extensions[@]}" >"$(hostname)/RANSOM_MALICIOUS/$(hostname)_ransom.txt"
+    search_files "${Ransomware_Extensions[@]}" >"$(hostname)/RANSOM_MALICIOUS/$(hostname)_ransom.txt"
     green "[!] Done"
 
+}
+
+# Function to check config-driven Linux IOCs in collected process and persistence data
+ioc_checks() {
+    mkdir -p "$(hostname)/OTHER"
+
+    cyan "[*] Checking suspicious executables and shell commands from config.json"
+
+    IOC_EXECUTABLES_FILE="./$(hostname)/OTHER/suspicious_executables.txt"
+    IOC_SHELL_COMMANDS_FILE="./$(hostname)/OTHER/suspicious_shell_commands.txt"
+
+    write_ioc_matches \
+        "suspicious_executables" \
+        "$IOC_EXECUTABLES_FILE" \
+        F_ps F_services F_systemctl F_cron2 F_p1 F_p2 F_p3 F_p4 F_p5 F_p6 F_p7 F_p8 F_p9
+
+    write_ioc_matches \
+        "suspicious_SH_commands|suspicious_PS_commands" \
+        "$IOC_SHELL_COMMANDS_FILE" \
+        F_ps F_cron2 F_p1 F_p2 F_p3 F_p4 F_p5 F_p6 F_p7 F_p8 F_p9 F_bashrc
+
+    F_suspicious_exec_hits=$(cat "$IOC_EXECUTABLES_FILE")
+    F_suspicious_sh_hits=$(cat "$IOC_SHELL_COMMANDS_FILE")
+
+    green "[!] Done"
 }
 
 
@@ -529,7 +622,7 @@ cyan "[*] Collecting System Information"
 # OS Info
 F_uname=$(uname -a)
 
-# Kernal info
+# Kernel info
 F_lshw=$(lshw)
 echo "Kernel Information" >./$(hostname)/OTHER/Kernel_Info.txt
 echo "$F_lshw" >>./$(hostname)/OTHER/Kernel_Info.txt
@@ -557,7 +650,7 @@ green "[!] Done"
 # User(s) Info
 ###############################################
 
-cyan "[*] Collecting User(s) Information"
+cyan "[*] Collecting user information"
 
 # who is connected
 F_w=$(w)
@@ -635,13 +728,15 @@ F_authlogs=$(grep -iE "session opened for|accepted password|new session|not in s
 echo "session opened for|accepted password|new session|not in sudoers" >./$(hostname)/OTHER/AuthLogs.txt
 echo "$F_authlogs" >./$(hostname)/OTHER/AuthLogs.txt
 
+ioc_checks
+
 green "[!] Done"
 
 # Recording end time
 enddate=$(date)
 
 #########################################################
-# Creating and formating out HTML Index File
+# Creating and formatting the HTML index file
 #########################################################
 
 cyan "[*] Creating & Formatting Index file"
@@ -3647,6 +3742,78 @@ cat <<EOL >>$OthersFile
         </div>
         <!-- Export Datatable End -->
 
+        <!-- Export Datatable start -->
+        <div class="card-box mb-30">
+          <div class="pd-20">
+            <h4 class="text-blue h4">Suspicious Executables From Config</h4>
+          </div>
+          <div class="pb-20">
+            <table class="table hover multiple-select-row data-table-export nowrap">
+              <thead>
+                <tr>
+                  <th class="table-plus datatable-nosort">Indicator</th>
+                  <th>Source</th>
+                  <th>Matching Line</th>
+                </tr>
+              </thead>
+              <tbody>
+EOL
+
+echo "$F_suspicious_exec_hits" | while IFS= read -r line; do
+    if [[ "$line" == "No matches found" ]]; then
+        echo "<tr><td><pre>None</pre></td><td><pre>N/A</pre></td><td><pre>No matches found</pre></td></tr>" >>$OthersFile
+    else
+        indicator=$(echo "$line" | cut -d'|' -f1)
+        source=$(echo "$line" | cut -d'|' -f2)
+        match_line=$(echo "$line" | cut -d'|' -f3-)
+        echo "<tr><td><pre>$indicator</pre></td><td><pre>$source</pre></td><td><pre>$match_line</pre></td></tr>" >>$OthersFile
+    fi
+done
+
+cat <<EOL >>$OthersFile
+               
+             </tbody>
+            </table>
+          </div>
+        </div>
+        <!-- Export Datatable End -->
+
+        <!-- Export Datatable start -->
+        <div class="card-box mb-30">
+          <div class="pd-20">
+            <h4 class="text-blue h4">Suspicious Shell Commands From Config</h4>
+          </div>
+          <div class="pb-20">
+            <table class="table hover multiple-select-row data-table-export nowrap">
+              <thead>
+                <tr>
+                  <th class="table-plus datatable-nosort">Indicator</th>
+                  <th>Source</th>
+                  <th>Matching Line</th>
+                </tr>
+              </thead>
+              <tbody>
+EOL
+
+echo "$F_suspicious_sh_hits" | while IFS= read -r line; do
+    if [[ "$line" == "No matches found" ]]; then
+        echo "<tr><td><pre>None</pre></td><td><pre>N/A</pre></td><td><pre>No matches found</pre></td></tr>" >>$OthersFile
+    else
+        indicator=$(echo "$line" | cut -d'|' -f1)
+        source=$(echo "$line" | cut -d'|' -f2)
+        match_line=$(echo "$line" | cut -d'|' -f3-)
+        echo "<tr><td><pre>$indicator</pre></td><td><pre>$source</pre></td><td><pre>$match_line</pre></td></tr>" >>$OthersFile
+    fi
+done
+
+cat <<EOL >>$OthersFile
+               
+             </tbody>
+            </table>
+          </div>
+        </div>
+        <!-- Export Datatable End -->
+
         <!-- Export Datatable End -->
       </div>
       <div class="footer-wrap pd-20 mb-20 card-box">
@@ -3998,6 +4165,22 @@ cat <<EOL >$ForensicatorExtrasFile
                       </td>
                       <td>
                         <a target="_blank" class="text-blue" href="RANSOM_MALICIOUS">/RANSOM_MALICIOUS</a>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="table-plus">
+                        <span class="badge badge-pill table-badge">Suspicious Executables</span>
+                      </td>
+                      <td>
+                        <a target="_blank" class="text-blue" href="OTHER">/OTHER</a>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td class="table-plus">
+                        <span class="badge badge-pill table-badge">Suspicious Shell Commands</span>
+                      </td>
+                      <td>
+                        <a target="_blank" class="text-blue" href="OTHER">/OTHER</a>
                       </td>
                     </tr>
 
