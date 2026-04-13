@@ -1,7 +1,7 @@
 {
   "metadata": {
     "generated_at_utc": "2026-04-08T23:49:45.679403+00:00",
-    "rules_root": "C:\\Users\\STOCKHOLM\\Desktop\\PROJECTS\\Live-Forensicator\\FEBRUARY-2026\\Live-Forensicator\\tools\\sigma-rules",
+    "rules_root": "sigma-rules",
     "total_rule_files": 1790,
     "compiled_rule_count": 1436,
     "skipped_rule_count": 354,
