@@ -16,7 +16,7 @@ ___________                                .__               __
  \___  / \____/|__|    \___  >___|  /____  >__|\___  >____  /__|  \____/|__|   
      \/                    \/     \/     \/        \/     \/                    
 
-                                                                          v4.1.1
+                                                                          v4.1.2
 ```
 
 ---
@@ -46,8 +46,9 @@ Key capabilities include:
 Forensicator works out-of-the-box, but additional features are enabled via external tools located in the `Forensicator-Share` folder.
 
 ```bash
-winpmem_mini_x64_rc2.exe   → RAM acquisition (WinPmem)
-etl2pcapng64.exe           → Convert network trace to PCAPNG
+winpmem_mini_x64_rc2.exe     → RAM acquisition (WinPmem)
+etl2pcapng64.exe             → Convert network trace to PCAPNG
+
 ```
 
 ---
@@ -55,8 +56,9 @@ etl2pcapng64.exe           → Convert network trace to PCAPNG
 # 📁 Additional Resources
 
 ```bash
-sqlite3.exe            → Browser history extraction
-sigma-rules/           → Detection rules (Sigma)
+sqlite3.exe                  → Helps with Browser History extraction
+SigmaRuntime.ps1             → Helps in processing Sigma Rules
+sigma-rules-precompiled.json → A precompiled updatable Sigma Ruleset easy to parse by the SigmaRuntime.
 ```
 
 ---
@@ -211,6 +213,7 @@ Forensicator detects suspicious activity through:
 * Browser history (all users)
 * Ransomware pattern detection
 * EVTX export
+* Detection Insight into each collected data with Mitre Mapping.
 
 ---
 
@@ -231,6 +234,10 @@ Forensicator detects suspicious activity through:
 <img width="1165" height="1037" src="https://github.com/user-attachments/assets/7a82d7a4-eac9-4c4c-8b12-193d77ed7640" />
 <br>
 <img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML3.png?raw=true" />
+<br>
+<img width="1061" height="933" alt="image" src="https://github.com/user-attachments/assets/3e247456-f406-489f-b240-6acd992c8743" />
+<br>
+<img width="1060" height="939" alt="image" src="https://github.com/user-attachments/assets/7897da4b-af8c-445c-aac4-0b1cbf76de72" />
 
 </details>
 
