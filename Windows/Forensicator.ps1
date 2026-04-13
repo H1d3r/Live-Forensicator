@@ -324,8 +324,6 @@ else{
 #endregion 
 
 
-
-
 ##################################################
 #region             USAGE                        #
 ##################################################
@@ -4955,593 +4953,26 @@ Write-ForensicLog ""
 #############################################################################################################
 
 # ---------------------------------------------------------
-# PREREQUISITES CHECK
-# sigma-cli requires Python 3.8+ and the pySigma Windows backend
-# Stage once on your IR toolkit:
-#   pip install sigma-cli
-#   sigma plugin install windows
+# SHIPPED SIGMA RUNTIME
+# End-user execution uses the precompiled JSON bundle and
+# shipped runtime only. Maintainer compilation happens in
+# tools\compile_sigma_bundle.py.
 # ---------------------------------------------------------
-function Test-SigmaPrerequisites {
-    $pythonOk = $false
-    $sigmaOk  = $false
-
-    try{
-        $pyVersion = & python --version 2>&1
-        if($pyVersion -match "Python 3\.([89]|1[0-9])"){ $pythonOk = $true }
-    }
-    catch{ }
-
-    try{
-        $sigmaVersion = & sigma version 2>&1
-        if($sigmaVersion -match "sigma"){ $sigmaOk = $true }
-    }
-    catch{ }
-
-    return @{ Python = $pythonOk; Sigma = $sigmaOk }
-}
-
-# ---------------------------------------------------------
-# SIGMA RULE MANAGEMENT
-# Downloads curated Windows rules from SigmaHQ
-# Caches locally — refreshes if older than 7 days
-# ---------------------------------------------------------
-$sigmaRulesPath  = "$PSScriptRoot\Forensicator-Share\sigma-rules"
-$sigmaRepoUrl    = "https://github.com/SigmaHQ/sigma/archive/refs/heads/master.zip"
-$sigmaZip        = "$env:TEMP\sigma_$(New-Guid).zip"
-$sigmaExtract    = "$env:TEMP\sigma_$(New-Guid)"
-
-# Rule categories relevant to IR — maps to SigmaHQ folder structure
-$relevantRulesets = @(
-    "rules\windows\process_creation",
-    "rules\windows\powershell",
-    "rules\windows\registry",
-    "rules\windows\network_connection",
-    "rules\windows\file_event",
-    "rules\windows\pipe_created",
-    "rules\windows\image_load"
-)
-
-function Get-SigmaRules {
-    param([string]$RulesPath)
-
-    $needsDownload = -not (Test-Path $RulesPath)
-    if(-not $needsDownload){
-        $ageDays = (New-TimeSpan -Start (Get-Item $RulesPath).LastWriteTime -End (Get-Date)).TotalDays
-        if($ageDays -gt 7){ $needsDownload = $true }
-    }
-
-    if($needsDownload){
-        Write-ForensicLog "Downloading Sigma rules from SigmaHQ" -Level INFO -Section "SIGMA"
-        try{
-            $tcp = [System.Net.Sockets.TcpClient]::new()
-            if(-not $tcp.ConnectAsync("github.com", 443).Wait(3000)){
-                Write-ForensicLog "github.com unreachable — using cached rules if available" `
-                                  -Level WARN -Section "SIGMA"
-                $tcp.Dispose()
-                return $false
-            }
-            $tcp.Dispose()
-
-            Invoke-WebRequest -Uri $sigmaRepoUrl `
-                              -OutFile $sigmaZip `
-                              -UseBasicParsing `
-                              -TimeoutSec 120 `
-                              -ErrorAction Stop
-
-            Expand-Archive $sigmaZip -DestinationPath $sigmaExtract -Force
-
-            # Copy only the relevant rule categories
-            $sourceRoot = Get-ChildItem $sigmaExtract -Directory | Select-Object -First 1
-
-            foreach($ruleset in $relevantRulesets){
-                $src = "$($sourceRoot.FullName)\$ruleset"
-                $dst = "$RulesPath\$ruleset"
-                if(Test-Path $src){
-                    New-Item $dst -ItemType Directory -Force | Out-Null
-                    Copy-Item "$src\*.yml" $dst -Force
-                }
-            }
-
-            Write-ForensicLog "Sigma rules downloaded and staged" -Level SUCCESS -Section "SIGMA"
-            return $true
-        }
-        catch{
-            Write-ForensicLog "Sigma rules download failed: $($_.Exception.Message)" `
-                              -Level ERROR -Section "SIGMA"
-            return $false
-        }
-        finally{
-            Remove-Item $sigmaZip     -Force -ErrorAction SilentlyContinue
-            Remove-Item $sigmaExtract -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-    return $true
-}
-
-# ---------------------------------------------------------
-# SIGMA RULE PARSER — pure PowerShell, no Python needed
-# Parses YAML Sigma rules and converts detection logic to
-# XPath queries compatible with Get-WinEvent -FilterXml
-#
-# Supports:
-#   - keywords detection
-#   - field-based detection (selection blocks)
-#   - condition: selection
-#   - condition: keywords
-#   - EventID mapping
-#   - LogSource mapping to Windows event log names
-# ---------------------------------------------------------
-
-# Log source to Windows event log name mapping
-$logSourceMap = @{
-    # Category mappings
-    "process_creation"   = "Security"
-    "ps_script"          = "Microsoft-Windows-PowerShell/Operational"
-    "ps_module"          = "Microsoft-Windows-PowerShell/Operational"
-    "ps_classic_script"  = "Windows PowerShell"
-    "registry_event"     = "Microsoft-Windows-Sysmon/Operational"
-    "file_event"         = "Microsoft-Windows-Sysmon/Operational"
-    "network_connection" = "Microsoft-Windows-Sysmon/Operational"
-    "pipe_created"       = "Microsoft-Windows-Sysmon/Operational"
-    "image_load"         = "Microsoft-Windows-Sysmon/Operational"
-    # Product/service overrides
-    "security"           = "Security"
-    "system"             = "System"
-    "application"        = "Application"
-}
-
-# Event ID mappings per log source category
-$eventIdMap = @{
-    "process_creation"   = @(4688, 1)     # 4688=Security, 1=Sysmon
-    "ps_script"          = @(4104)
-    "ps_module"          = @(4103)
-    "ps_classic_script"  = @(400, 800)
-    "registry_event"     = @(12, 13, 14)
-    "file_event"         = @(11)
-    "network_connection" = @(3)
-    "pipe_created"       = @(17, 18)
-    "image_load"         = @(7)
-}
-
-function ConvertFrom-SigmaRule {
-    param([string]$RulePath)
-
-    try{
-        $content = Get-Content $RulePath -Raw -ErrorAction Stop
-
-        # -------------------------------------------------
-        # YAML PARSER — lightweight, handles Sigma structure
-        # Sigma YAML is simple enough to parse without a
-        # full YAML library
-        # -------------------------------------------------
-        function Parse-SigmaYaml {
-            param([string]$Yaml)
-
-            $result   = @{}
-            $lines    = $Yaml -split "`n"
-            $i        = 0
-            $stack    = [System.Collections.Generic.Stack[hashtable]]::new()
-            $current  = $result
-            $indent   = 0
-
-            while($i -lt $lines.Count){
-                $line = $lines[$i]
-                if($line -match '^\s*#' -or [string]::IsNullOrWhiteSpace($line)){ $i++; continue }
-
-                $lineIndent = ($line -match '^(\s+)') ? $matches[1].Length : 0
-
-                # Key: value pair
-                if($line -match '^\s*([^:\s][^:]*?):\s*(.*)$'){
-                    $key   = $matches[1].Trim()
-                    $value = $matches[2].Trim()
-
-                    if([string]::IsNullOrEmpty($value)){
-                        # Start of a nested block
-                        $nested = @{}
-                        $current[$key] = $nested
-                    }
-                    elseif($value -match '^\|'){
-                        # Block scalar — collect following indented lines
-                        $blockLines = @()
-                        $i++
-                        while($i -lt $lines.Count){
-                            $nextLine = $lines[$i]
-                            if([string]::IsNullOrWhiteSpace($nextLine) -or
-                               ($nextLine -match '^(\s+)' -and $matches[1].Length -gt $lineIndent)){
-                                $blockLines += $nextLine.Trim()
-                                $i++
-                            } else { break }
-                        }
-                        $current[$key] = $blockLines
-                        continue
-                    }
-                    else{
-                        $current[$key] = $value.Trim("'").Trim('"')
-                    }
-                }
-                # List item
-                elseif($line -match '^\s*-\s+(.+)$'){
-                    # handled in block scalar collection
-                }
-
-                $i++
-            }
-            return $result
-        }
-
-        # Extract key sections using regex — more reliable than
-        # full YAML parse for Sigma's specific structure
-        $title       = if($content -match '(?m)^title:\s*(.+)$')         { $matches[1].Trim() }  else { "Unknown" }
-        $description = if($content -match '(?m)^description:\s*(.+)$')   { $matches[1].Trim() }  else { "" }
-        $status      = if($content -match '(?m)^status:\s*(.+)$')        { $matches[1].Trim() }  else { "" }
-        $level       = if($content -match '(?m)^level:\s*(.+)$')         { $matches[1].Trim() }  else { "medium" }
-        $tags        = if($content -match '(?m)^tags:\s*\n((?:\s+-\s+.+\n?)+)'){ $matches[1] -split "`n" | Where-Object { $_ -match '-\s+(.+)' } | ForEach-Object { $matches[1].Trim() } } else { @() }
-
-        # Skip experimental/deprecated rules — too noisy
-        if($status -in @("deprecated","unsupported","experimental")){
-            return $null
-        }
-
-        # Log source
-        $logCategory = if($content -match '(?m)^\s+category:\s*(.+)$')  { $matches[1].Trim() }  else { "" }
-        $logProduct  = if($content -match '(?m)^\s+product:\s*(.+)$')   { $matches[1].Trim() }  else { "" }
-        $logService  = if($content -match '(?m)^\s+service:\s*(.+)$')   { $matches[1].Trim() }  else { "" }
-
-        # Resolve log name
-        $logName = $logSourceMap[$logCategory] ??
-                   $logSourceMap[$logService]  ??
-                   "Security"
-
-        # Resolve event IDs
-        $eventIds = $eventIdMap[$logCategory] ?? @()
-
-        # Condition
-        $condition = if($content -match '(?m)^\s+condition:\s*(.+)$'){ $matches[1].Trim() } else { "selection" }
-
-        # -------------------------------------------------
-        # DETECTION BLOCK EXTRACTION
-        # Handles selection blocks and keyword lists
-        # -------------------------------------------------
-        $detectionSection = ""
-        if($content -match '(?ms)^detection:\n(.+?)(?=^[a-z]|\z)'){
-            $detectionSection = $matches[1]
-        }
-
-        if([string]::IsNullOrWhiteSpace($detectionSection)){ return $null }
-
-        # Parse selection blocks — each named block is a hashtable
-        $selections = @{}
-        $blockPattern = '(?ms)^\s{4}(\w+):\s*\n((?:\s{6,}.+\n?)+)'
-
-        foreach($blockMatch in [regex]::Matches($detectionSection, $blockPattern)){
-            $blockName  = $blockMatch.Groups[1].Value
-            $blockLines = $blockMatch.Groups[2].Value -split "`n" |
-                          Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-
-            $blockData = @{}
-            $currentField = $null
-
-            foreach($line in $blockLines){
-                # Field definition: FieldName|modifier:
-                if($line -match '^\s+([^:|\s]+)(\|[^:]+)?:\s*$'){
-                    $currentField = $matches[1].Trim()
-                    $modifier     = $matches[2]
-                    $blockData[$currentField] = @{ Values = @(); Modifier = $modifier }
-                }
-                # Field with inline value
-                elseif($line -match '^\s+([^:|\s]+)(\|[^:]+)?:\s*(.+)$'){
-                    $currentField = $matches[1].Trim()
-                    $modifier     = $matches[2]
-                    $value        = $matches[3].Trim().Trim("'").Trim('"')
-                    $blockData[$currentField] = @{ Values = @($value); Modifier = $modifier }
-                }
-                # List item under current field
-                elseif($line -match '^\s+-\s+(.+)$' -and $currentField){
-                    $value = $matches[1].Trim().Trim("'").Trim('"')
-                    $blockData[$currentField].Values += $value
-                }
-            }
-
-            $selections[$blockName] = $blockData
-        }
-
-        # Keyword lists (flat list under 'keywords:')
-        $keywords = @()
-        if($detectionSection -match '(?ms)^\s{4}keywords:\s*\n((?:\s+-\s+.+\n?)+)'){
-            $keywords = $matches[1] -split "`n" |
-                        Where-Object { $_ -match '^\s+-\s+(.+)$' } |
-                        ForEach-Object { $matches[1].Trim().Trim("'").Trim('"') }
-        }
-
-        return [PSCustomObject]@{
-            Title      = $title
-            Description= $description
-            Level      = $level
-            Status     = $status
-            Tags       = $tags
-            LogName    = $logName
-            EventIds   = $eventIds
-            Condition  = $condition
-            Selections = $selections
-            Keywords   = $keywords
-            RulePath   = $RulePath
-        }
-    }
-    catch{
-        Write-Verbose "Failed to parse Sigma rule $RulePath : $($_.Exception.Message)"
-        return $null
-    }
-}
-
-# ---------------------------------------------------------
-# SIGMA FIELD TO XPATH MAPPING
-# Maps Sigma field names to Windows event XML field names
-# ---------------------------------------------------------
-$fieldMap = @{
-    # Process creation (4688 / Sysmon 1)
-    "CommandLine"         = "CommandLine"
-    "Image"               = "NewProcessName"
-    "OriginalFileName"    = "OriginalFileName"
-    "ParentImage"         = "ParentProcessName"
-    "ParentCommandLine"   = "ParentCommandLine"
-    "User"                = "SubjectUserName"
-    "ProcessId"           = "NewProcessId"
-
-    # PowerShell (4104)
-    "ScriptBlockText"     = "ScriptBlockText"
-    "Path"                = "Path"
-
-    # Network
-    "DestinationPort"     = "DestPort"
-    "DestinationIp"       = "DestAddress"
-    "SourceIp"            = "SourceAddress"
-
-    # Registry
-    "TargetObject"        = "TargetObject"
-    "Details"             = "Details"
-    "EventType"           = "EventType"
-
-    # File
-    "TargetFilename"      = "TargetFilename"
-
-    # Common
-    "EventID"             = "EventID"
-    "Channel"             = "Channel"
-}
-
-function ConvertTo-XPathFromSigma {
-    param([PSCustomObject]$Rule)
-
-    if($null -eq $Rule -or $Rule.Selections.Count -eq 0){ return $null }
-
-    $xpathParts = @()
-
-    foreach($selectionName in $Rule.Selections.Keys){
-        $selection  = $Rule.Selections[$selectionName]
-        $fieldParts = @()
-
-        foreach($field in $selection.Keys){
-            $fieldDef   = $selection[$field]
-            $values     = $fieldDef.Values
-            $modifier   = $fieldDef.Modifier
-
-            # Map Sigma field name to Windows event field name
-            $winField = $fieldMap[$field] ?? $field
-
-            if($values.Count -eq 0){ continue }
-
-            $valueParts = foreach($val in $values){
-                # Escape XPath special characters
-                $escaped = $val -replace "'","&apos;" `
-                                -replace '"',"&quot;" `
-                                -replace '&','&amp;' `
-                                -replace '<','&lt;' `
-                                -replace '>','&gt;'
-
-                # Handle Sigma modifiers
-                if($modifier -match 'contains'){
-                    "contains(EventData/Data[@Name='$winField'], '$escaped')"
-                }
-                elseif($modifier -match 'startswith'){
-                    "starts-with(EventData/Data[@Name='$winField'], '$escaped')"
-                }
-                elseif($modifier -match 'endswith'){
-                    # XPath 1.0 has no ends-with — use contains as approximation
-                    "contains(EventData/Data[@Name='$winField'], '$escaped')"
-                }
-                elseif($modifier -match 'windash'){
-                    # windash — match both / and - as parameter prefixes
-                    $withDash   = $escaped -replace '^-','/'
-                    $withSlash  = $escaped -replace '^/','-'
-                    "(contains(EventData/Data[@Name='$winField'], '$escaped') or contains(EventData/Data[@Name='$winField'], '$withDash') or contains(EventData/Data[@Name='$winField'], '$withSlash'))"
-                }
-                elseif($modifier -match 're'){
-                    # Regex — XPath 1.0 has no regex support
-                    # Skip regex conditions to avoid false negatives
-                    # from broken XPath
-                    $null
-                }
-                else{
-                    # Default — exact match
-                    "EventData/Data[@Name='$winField']='$escaped'"
-                }
-            }
-
-            $valueParts = $valueParts | Where-Object { $_ }
-
-            if($valueParts.Count -gt 0){
-                $fieldParts += "(" + ($valueParts -join " or ") + ")"
-            }
-        }
-
-        if($fieldParts.Count -gt 0){
-            $xpathParts += "(" + ($fieldParts -join " and ") + ")"
-        }
-    }
-
-    if($xpathParts.Count -eq 0){ return $null }
-
-    # Handle condition logic
-    $xpathFilter = switch -Regex ($Rule.Condition){
-        "selection"                         { $xpathParts -join " and " }
-        "1 of selection\*"                  { $xpathParts -join " or "  }
-        "all of selection\*"                { $xpathParts -join " and " }
-        "keywords"                          {
-            $kwParts = $Rule.Keywords | ForEach-Object {
-                "contains(., '$($_ -replace "'","&apos;")')"
-            }
-            $kwParts -join " or "
-        }
-        default                             { $xpathParts -join " and " }
-    }
-
-    if([string]::IsNullOrWhiteSpace($xpathFilter)){ return $null }
-
-    # Build event ID filter
-    $idClause = if($Rule.EventIds.Count -gt 0){
-        "(" + ($Rule.EventIds | ForEach-Object { "EventID=$_" }) -join " or " + ")"
-    } else { $null }
-
-    $startISO = [datetime]::UtcNow.AddDays(-30).ToString("o")
-    $timeFilter = "TimeCreated[@SystemTime&gt;='$startISO']"
-
-    $systemFilter = if($idClause){
-        "$idClause and $timeFilter"
-    } else {
-        $timeFilter
-    }
-
-    return @"
-<QueryList>
-  <Query Id="0" Path="$($Rule.LogName)">
-    <Select Path="$($Rule.LogName)">*[System[$systemFilter] and EventData[$xpathFilter]]</Select>
-  </Query>
-</QueryList>
-"@
-}
-
-# ---------------------------------------------------------
-# SIGMA SCAN ENGINE
-# Loads rules, converts to XPath, queries event logs
-# ---------------------------------------------------------
-function Invoke-SigmaScan {
-    param(
-        [string]$RulesPath,
-        [int]   $DaysBack   = 30,
-        [ValidateSet("critical","high","medium","low","informational")]
-        [string]$MinLevel   = "medium"
-    )
-
-    $levelOrder = @{
-        "critical"      = 5
-        "high"          = 4
-        "medium"        = 3
-        "low"           = 2
-        "informational" = 1
-    }
-    $minLevelNum = $levelOrder[$MinLevel]
-
-    $results = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-    # Load and convert all relevant rules
-    $ruleFiles = Get-ChildItem $RulesPath -Filter "*.yml" -Recurse -ErrorAction SilentlyContinue
-    Write-ForensicLog "Loading $($ruleFiles.Count) Sigma rules" -Level INFO -Section "SIGMA" -Detail "Loaded $($ruleFiles.Count) Sigma rules"
-
-    $convertedRules = @()
-    foreach($ruleFile in $ruleFiles){
-        $rule = ConvertFrom-SigmaRule $ruleFile.FullName
-        if($null -eq $rule){ continue }
-
-        # Skip below minimum severity
-        if($levelOrder[$rule.Level] -lt $minLevelNum){ continue }
-
-        $xpath = ConvertTo-XPathFromSigma $rule
-        if($null -eq $xpath){ continue }
-
-        $convertedRules += @{ Rule = $rule; XPath = $xpath }
-    }
-
-    Write-ForensicLog "Converted $($convertedRules.Count) rules to XPath queries" -Level FINDING -Section "SIGMA" -Detail "Total rules: $($ruleFiles.Count)"
-                      
-
-    # Execute each rule against the event log
-    $ruleCount = 0
-    foreach($entry in $convertedRules){
-        $ruleCount++
-        $rule  = $entry.Rule
-        $xpath = $entry.XPath
-
-        Write-Progress -Activity "Running Sigma Rules" `
-                       -Status "[$ruleCount/$($convertedRules.Count)] $($rule.Title)" `
-                       -PercentComplete ([Math]::Round(($ruleCount / $convertedRules.Count) * 100))
-
-        # Verify the log exists before querying
-        try{
-            Get-WinEvent -LogName $rule.LogName -MaxEvents 1 -ErrorAction Stop | Out-Null
-        }
-        catch{ continue }
-
-        try{
-            $events = Get-WinEvent -FilterXml $xpath -ErrorAction Stop
-
-            foreach($event in $events){
-                try{
-                    $xmlData = [xml]$event.ToXml()
-                    $data    = @{}
-                    foreach($node in $xmlData.Event.EventData.Data){
-                        if($node.Name){ $data[$node.Name] = $node.'#text' }
-                    }
-
-                    $results.Add([PSCustomObject]@{
-                        RuleTitle   = $rule.Title
-                        RuleLevel   = $rule.Level
-                        RuleTags    = $rule.Tags -join ", "
-                        EventId     = $event.Id
-                        LogName     = $rule.LogName
-                        TimeCreated = $event.TimeCreated.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-                        User        = $data["SubjectUserName"] ?? $data["TargetUserName"] ?? "N/A"
-                        CommandLine = $data["CommandLine"]     ?? $data["ScriptBlockText"] ?? "N/A"
-                        Process     = $data["NewProcessName"]  ?? $data["Image"] ?? "N/A"
-                        RuleFile    = Split-Path $rule.RulePath -Leaf
-                    })
-
-                    Write-ForensicLog "SIGMA HIT: $($rule.Title)" `
-                                      -Level FINDING `
-                                      -Section "SIGMA" `
-                                      -Detail "Level: $($rule.Level) | EventId: $($event.Id) | Time: $($event.TimeCreated)"
-                }
-                catch{ }
-            }
-        }
-        catch{
-            if($_.Exception.Message -notmatch "No events were found"){ }
-        }
-    }
-
-    Write-Progress -Activity "Running Sigma Rules" -Completed
-    return $results
-}
-
-# ---------------------------------------------------------
-# MAIN EXECUTION
-# ---------------------------------------------------------
+$sigmaBundlePath  = "$PSScriptRoot\Forensicator-Share\sigma-rules-precompiled.json"
+$sigmaRuntimePath = "$PSScriptRoot\Forensicator-Share\SigmaRuntime.ps1"
 Write-ForensicLog "Initialising Sigma detection engine" -Level INFO -Section "SIGMA"
 
-$prereqs = Test-SigmaPrerequisites
-if(-not $prereqs.Python -or -not $prereqs.Sigma){
-    Write-ForensicLog "sigma-cli not available — using built-in pure PowerShell rule engine" -Level INFO -Section "SIGMA" `
-                      
+if(Test-Path $sigmaRuntimePath){
+    # Use the shipped precompiled runtime instead of the legacy in-file parser above.
+    . $sigmaRuntimePath
+    $sigmaFindings = Invoke-SigmaScan -BundlePath $sigmaBundlePath `
+                                       -DaysBack  30 `
+                                       -MinLevel  "medium"
 }
-
-$rulesReady = Get-SigmaRules -RulesPath $sigmaRulesPath
-
-if(-not $rulesReady -and -not (Test-Path $sigmaRulesPath)){
-    Write-ForensicLog "No Sigma rules available — skipping detection" -Level ERROR -Section "SIGMA" -Detail "Ensure sigma-cli is installed or that the rules are cached locally at $sigmaRulesPath" `
+else{
+    Write-ForensicLog "Sigma runtime file missing — skipping detection" -Level ERROR -Section "SIGMA" -Detail "Expected runtime at $sigmaRuntimePath"
+    $sigmaFindings = [System.Collections.Generic.List[PSCustomObject]]::new()
 }
-
-$sigmaFindings = Invoke-SigmaScan -RulesPath $sigmaRulesPath `
-                                   -DaysBack  30 `
-                                   -MinLevel  "medium"
 
 # ---------------------------------------------------------
 # HTML OUTPUT
@@ -5608,16 +5039,10 @@ Write-ForensicLog ""
 
 #Write-ForensicLog -Fore DarkCyan "[!] Hang on, the Forensicator is compiling your results"
 
-###########################################################################################################
-#region ########################## CREATING AND FORMATTING THE HTML FILES  ################################
-###########################################################################################################
-
-Write-ForensicLog "[*] Creating and Formatting the HTML files" -Level INFO -Section "CORE"
 
 
-function ForensicatorIndex {
+$Global:Style_Head = @"
 
-  @"
 <!DOCTYPE html>
 <html>
 <head>
@@ -5643,9 +5068,13 @@ onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/da
 <link rel="stylesheet" type="text/css"
 href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
 onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
+
 <link rel="stylesheet" type="text/css"
 href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
 onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
+
+$FI_Styles
+
 </head>
 <body>
 <div class="pre-loader">
@@ -5733,6 +5162,13 @@ alt="" /></a>
 </div>
 </div>
 </div>
+
+
+"@
+
+
+$Global:Style_Menu = @"
+
 <div class="left-side-bar header-white active">
 <div class="brand-logo">
 <a href="index.html">
@@ -5810,6 +5246,1076 @@ alt="" /></a>
 </div>
 </div>
 </div>
+
+
+"@
+
+
+$Global:Style_Footer = @"
+
+<div class="footer-wrap pd-20 mb-20 card-box">
+Live Forensicator - Coded By
+<a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
+</div>
+</div>
+</div>
+<!-- js -->
+<script type="text/javascript"
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
+<script type="text/javascript"
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
+<script type="text/javascript"
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
+<script type="text/javascript"
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
+<script type="text/javascript"
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
+<!-- buttons for Export datatable -->
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.buttons.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
+<!-- Datatable Setting js -->
+<script
+src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
+<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
+
+$FI_Panel
+$FI_Scripts
+
+</body>
+</html>
+
+"@
+
+
+
+# ================================
+# FORSENICATOR UI COMPONENTS
+# ================================
+
+# ---- STYLES ----
+$Global:FI_Styles = @"
+<style>
+.fi-panel {
+  position: fixed;
+  top: 0;
+  right: -560px;
+  width: 560px;
+  height: 100%;
+  background: #0f172a;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.4);
+  transition: right 0.3s ease;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+}
+.fi-panel.open { right: 0; }
+
+.fi-panel-header {
+  padding: 12px;
+  background: #020617;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+}
+
+.fi-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 0;
+  background: #0f172a;
+  border-bottom: 1px solid rgba(148,163,184,0.2);
+}
+
+.fi-tabs:empty {
+  display: none;
+}
+
+.fi-tab {
+  border: 1px solid rgba(148,163,184,0.25);
+  background: transparent;
+  color: #cbd5e1;
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.fi-tab:hover,
+.fi-tab.active {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+.fi-close {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.fi-content {
+  padding: 16px;
+  overflow-y: auto;
+  color: #e5e7eb;
+  font-size: 13px;
+}
+
+.fi-tab-panel {
+  display: none;
+}
+
+.fi-tab-panel.active {
+  display: block;
+}
+
+.fi-block { margin-bottom: 18px; }
+
+.fi-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.fi-block h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin-bottom: 0;
+}
+
+.fi-block p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.fi-block ul { padding-left: 18px; }
+
+.fi-block li { margin-bottom: 6px; }
+
+.fi-block code {
+  color: #bfdbfe;
+  background: rgba(30,41,59,0.9);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.fi-code {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid rgba(148,163,184,0.2);
+  border-radius: 10px;
+  background: rgba(2,6,23,0.92);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.fi-code code {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.fi-copy-btn {
+  border: 1px solid rgba(148,163,184,0.25);
+  border-radius: 999px;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.fi-copy-btn:hover,
+.fi-copy-btn.copied {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+
+.fi-message {
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.fd-info-trigger {
+  position: relative;
+  cursor: pointer;
+  color: #aaa;
+  margin-left: 8px;
+}
+
+.fd-info-trigger:hover { color: #fff; }
+
+/* Tooltip */
+.fd-info-trigger::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: 140%;
+  right: 0;
+  background: #111;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  opacity: 0;
+  transition: 0.2s;
+  white-space: nowrap;
+}
+
+.fd-info-trigger:hover::after {
+  opacity: 1;
+}
+</style>
+"@
+
+# ---- PANEL HTML ----
+$Global:FI_Panel = @"
+<div id="fi-panel" class="fi-panel">
+  <div class="fi-panel-header">
+    <span id="fi-panel-title">Detection Details</span>
+    <button type="button" class="fi-close" onclick="closePanel()">✕</button>
+  </div>
+  <div id="fi-panel-tabs" class="fi-tabs"></div>
+  <div id="fi-panel-content" class="fi-content"></div>
+</div>
+"@
+
+function Get-ForensicatorDetectionCommandsMap {
+  return [ordered]@{
+    'CURRENT_USER_INFORMATION' = @'
+$Env:UserName
+$Env:UserDomain
+[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+'@
+    'SYSTEM_DETAILS' = 'Get-CimInstance -Class Win32_ComputerSystem | Select-Object Name, DNSHostName, Domain, Manufacturer, Model, PrimaryOwnerName, TotalPhysicalMemory, Workgroup'
+    'LOGON_SESSIONS' = '(((quser) -replace ''^>'', '''') -replace ''\s{2,}'', '','').Trim() | ConvertFrom-Csv'
+    'USER_PROCESSES' = 'Get-Process -IncludeUserName | Select-Object Name, Id, UserName, CPU, Memory, Path'
+    'USER_PROFILE' = 'Get-CimInstance -Class Win32_UserProfile | Select-Object LocalPath, SID, LastUseTime'
+    'ADMINISTRATOR_ACCOUNTS' = 'Get-LocalGroupMember -Group "Administrators"'
+    'LOCAL_GROUPS' = 'Get-LocalGroup'
+    'INSTALLED_PROGRAMS' = 'Get-CimInstance -ClassName Win32_Product | Select-Object Name, Version, Vendor, InstallDate, InstallSource, PackageName, LocalPackage'
+    'INSTALLED_PROGRAMS_REGISTRY' = 'Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, Publisher, InstallDate'
+    'ENVIRONMENT_VARIABLES' = 'Get-ChildItem ENV: | Select-Object Name, Value'
+    'SYSTEM_INFORMATION' = 'Get-CimInstance -Class Win32_ComputerSystem | Select-Object -Property Name, Caption, SystemType, Manufacturer, Model, DNSHostName, Domain, PartOfDomain, WorkGroup, CurrentTimeZone, PCSystemType, HyperVisorPresent'
+    'OPERATING_SYSTEM_INFORMATION' = 'Get-CimInstance -Class Win32_OperatingSystem | Select-Object -Property Name, Description, Version, BuildNumber, InstallDate, SystemDrive, SystemDevice, WindowsDirectory, LastBootUpTime, Locale, LocalDateTime, NumberOfUsers, RegisteredUser, Organization, OSProductSuite'
+    'HOTFIXES' = 'Get-HotFix | Select-Object -Property CSName, Caption, Description, HotFixID, InstalledBy, InstalledOn'
+    'WINDOWS_DEFENDER_STATUS' = 'Get-MpComputerStatus | Select-Object -Property AMProductVersion, AMRunningMode, AMServiceEnabled, AntispywareEnabled, AntispywareSignatureLastUpdated, AntivirusEnabled, AntivirusSignatureLastUpdated, BehaviorMonitorEnabled, DefenderSignaturesOutOfDate, DeviceControlPoliciesLastUpdated, DeviceControlState, NISSignatureLastUpdated, QuickScanEndTime, RealTimeProtectionEnabled'
+    'PROCESSES' = 'Get-Process | Select-Object Handles, StartTime, PM, VM, SI, Id, ProcessName, Path, Product, FileVersion'
+    'STARTUP_PROGRAMS' = 'Get-CimInstance Win32_StartupCommand | Select-Object Name, Command, Location, User'
+    'SCHEDULED_TASK' = 'Get-ScheduledTask | Select-Object TaskPath, TaskName, State'
+    'SCHEDULED_TASK_STATE' = 'Get-ScheduledTask | Get-ScheduledTaskInfo | Select-Object LastRunTime, LastTaskResult, NextRunTime, NumberOfMissedRuns, TaskName, TaskPath, PSComputerName'
+    'SERVICES' = 'Get-Service | Select-Object DisplayName, ServiceName, Status, StartType, @{Name=''StartName'';Expression={$_.StartName}}, @{Name=''Description'';Expression={(Get-CimInstance -Class Win32_Service -Filter "Name=''$($_.Name)''").Description}}'
+    'REGRUN' = 'Get-RegistryHtml "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run"'
+    'REGRUNONCE' = 'Get-RegistryHtml "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce"'
+    'REGRUNONCEEX' = 'Get-RegistryHtml "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnceEx"'
+    'DNS_CACHE' = 'Get-DnsClientCache | Select-Object Entry, Name, Status, TimeToLive, Data'
+    'NETWORK_ADAPTERS' = 'Get-CimInstance -Class Win32_NetworkAdapter | Select-Object AdapterType, ProductName, Description, MACAddress, Availability, NetConnectionStatus, NetEnabled, PhysicalAdapter'
+    'IP_CONFIGURATION' = 'Get-CimInstance Win32_NetworkAdapterConfiguration | Select-Object Description, @{Name=''IpAddress'';Expression={$_.IpAddress -join ''; ''}}, @{Name=''IpSubnet'';Expression={$_.IpSubnet -join ''; ''}}, MACAddress, @{Name=''DefaultIPGateway'';Expression={$_.DefaultIPGateway -join ''; ''}}, DNSDomain, DNSHostName, DHCPEnabled, ServiceName'
+    'NETWORK_ADAPTER_IP_ADDRESS' = @'
+foreach ($ip in Get-NetIPAddress -AddressFamily IPv4 | Where-Object {
+    $_.IPAddress -notmatch "^(127\.|169\.254)"
+}) {
+    $adapter = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -ErrorAction SilentlyContinue
+
+    [PSCustomObject]@{
+        InterfaceAlias = $ip.InterfaceAlias
+        IPAddress      = $ip.IPAddress
+        Status         = $adapter.Status
+        LinkSpeed      = $adapter.LinkSpeed
+    }
+}
+'@
+    'NETWORK_CONNECTION_PROFILE' = 'Get-NetConnectionProfile | Select-Object Name, InterfaceAlias, NetworkCategory, IPV4Connectivity, IPv6Connectivity'
+    'NETWORK_ADAPTERS_BANDWIDTH' = 'Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, MacAddress, LinkSpeed'
+    'ARP_CACHE' = 'Get-NetNeighbor | Select-Object InterfaceAlias, IPAddress, LinkLayerAddress'
+    'TCP_CONNECTIONS' = 'Get-NetTCPConnection | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess, @{Name=''Process'';Expression={(Get-Process -Id $_.OwningProcess).ProcessName}}'
+    'LOCAL_ADDRESS' = 'Get-NetTCPConnection | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State, OwningProcess, @{Name=''Process'';Expression={(Get-Process -Id $_.OwningProcess).ProcessName}}'
+    'WIFI_NETWORKS_PASSWORDS' = 'netsh.exe wlan show profiles | Select-String "\:(.+)$" | ForEach-Object { $wlanname = $_.Matches.Groups[1].Value.Trim(); $_ } | ForEach-Object { netsh wlan show profile name="$wlanname" key=clear } | Select-String ''Key Content\W+\:(.+)$'' | ForEach-Object { $wlanpass = $_.Matches.Groups[1].Value.Trim(); [PSCustomObject]@{ PROFILE_NAME = $wlanname; PASSWORD = $wlanpass } }'
+    'FIREWALL_RULES' = 'Get-NetFirewallRule | Select-Object Name, DisplayName, Description, Direction, Action, EdgeTraversalPolicy, Owner, EnforcementStatus'
+    'SMB_SESSIONS' = 'Get-SmbSession -ErrorAction SilentlyContinue'
+    'SMB_SHARES' = 'Get-SmbShare | Select-Object Description, Path, Volume'
+    'IP_ROUTE_NON_LOCAL' = 'Get-NetRoute | Where-Object { $_.NextHop -ne ''::'' } | Where-Object { $_.NextHop -ne ''0.0.0.0'' } | Where-Object { $_.NextHop.Substring(0, 6) -ne ''fe80::'' }'
+    'NETWORK_ADAPTERS_IP_ROUTE' = 'Get-NetRoute | Where-Object { $_.NextHop -ne ''::'' } | Where-Object { $_.NextHop -ne ''0.0.0.0'' } | Where-Object { $_.NextHop.Substring(0, 6) -ne ''fe80::'' } | Get-NetAdapter'
+    'IP_HOPS' = 'Get-NetRoute | Where-Object { $_.ValidLifetime -eq ([TimeSpan]::MaxValue) }'
+    'LOGICAL_DRIVES' = 'Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, DriveType, FreeSpace, Size, VolumeName'
+    'USB_DEVICES' = 'Get-ItemProperty -Path HKLM:\System\CurrentControlSet\Enum\USB*\*\* | Select-Object FriendlyName, Driver, Mfg, DeviceDesc'
+    'WEBCAMS' = 'Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | Where-Object { $_.PNPClass -eq "Image" -or $_.Caption -match ''camera|webcam'' } | Select-Object Caption, Manufacturer, DeviceID, Status, Present'
+    'UPNP_DEVICES' = 'Get-PnpDevice -PresentOnly | Where-Object { $_.Class -in @(''USB'',''DiskDrive'',''Mouse'',''Keyboard'',''Net'',''Image'',''Media'',''Monitor'') } | Select-Object Status, Class, FriendlyName, InstanceId'
+    'PREVIOUSLY_CONNECTED_DRIVES' = 'Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR\*\*" -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName } | Select-Object FriendlyName, Mfg, @{Name="Serial";Expression={$_.PSChildName}}, @{Name="LastWriteTime";Expression={(Get-Item $_.PSPath).LastWriteTime}} | Sort-Object LastWriteTime -Descending'
+    'POWERSHELL_HISTORY' = @'
+Get-History -ErrorAction SilentlyContinue |
+    Select-Object Id, CommandLine, StartExecutionTime, EndExecutionTime
+
+Get-ChildItem "C:\Users\*\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" -ErrorAction SilentlyContinue |
+    ForEach-Object { Get-Content $_.FullName }
+'@
+    'DOWNLOADS' = 'Get-ChildItem C:\Users\*\Downloads\* -Recurse | Select-Object Name, FullName, Extension, CreationTimeUTC, LastAccessTimeUTC, LastWriteTimeUTC, Attributes | Where-Object { $_.Extension -eq ''.exe'' }'
+    'APPDATA' = 'Get-ChildItem C:\Users\*\AppData\Local\Temp\* -Recurse | Select-Object Name, FullName, Extension, CreationTimeUTC, LastAccessTimeUTC, LastWriteTimeUTC, Attributes | Where-Object { $_.Extension -eq ''.exe'' }'
+    'EXECS_IN_TEMP' = 'Get-ChildItem C:\Temp\* -Recurse | Select-Object Name, FullName, Extension, CreationTimeUTC, LastAccessTimeUTC, LastWriteTimeUTC, Attributes | Where-Object { $_.Extension -eq ''.exe'' }'
+    'PERFLOGS' = 'Get-ChildItem C:\PerfLogs\* -Recurse | Select-Object Name, FullName, Extension, CreationTimeUTC, LastAccessTimeUTC, LastWriteTimeUTC, Attributes | Where-Object { $_.Extension -eq ''.exe'' }'
+    'DOCUMENTS' = 'Get-ChildItem C:\Users\*\Documents\* -Recurse | Select-Object Name, FullName, Extension, CreationTimeUTC, LastAccessTimeUTC, LastWriteTimeUTC, Attributes | Where-Object { $_.Extension -eq ''.exe'' }'
+    'LINK_FILES' = @'
+$lnkFiles = Get-ChildItem -Path "C:\Users" -Recurse -Filter *.lnk -ErrorAction SilentlyContinue
+$WshShell = New-Object -ComObject WScript.Shell
+
+foreach ($file in $lnkFiles) {
+    $shortcut = $WshShell.CreateShortcut($file.FullName)
+}
+'@
+    'GROUP_POLICY_REPORT' = 'GPRESULT /H "$PSScriptRoot\$env:COMPUTERNAME\GPOReport.html" /F'
+    'WINPMEM_RAM_CAPTURE' = 'Start-Process -FilePath $winpmem -ArgumentList $rawPath -Wait -PassThru -NoNewWindow'
+    'NETWORK_TRACE' = @'
+pktmon start --capture --pkt-size 0 --log-mode circular --file-name $pcapPath
+Start-Sleep -Seconds $netshduration
+pktmon stop
+'@
+    'EVENT_LOGS' = @'
+foreach ($log in @("System", "Security", "Application")) {
+    wevtutil epl $log $destination
+}
+'@
+    'IIS_LOGS' = 'Copy-Item -Path "C:\inetpub\logs\*" -Destination "$PSScriptRoot\$env:COMPUTERNAME\IISLogs" -Recurse'
+    'TOMCAT_LOGS' = 'Copy-Item -Path "$sourceDirectory\*.log" -Destination $destinationDirectory -Force -Recurse'
+    'LOG4J' = 'Get-ChildItem $Drive -Recurse -Force -Include *.jar -ErrorAction 0 | ForEach-Object { Select-String ''JndiLookup.class'' $_ } | Select-Object -ExpandProperty Path'
+    'BITLOCKER_DRIVES' = @'
+Get-BitLockerVolume -ErrorAction SilentlyContinue
+
+manage-bde -protectors -get $drive
+manage-bde -status $drive
+'@
+    'LOCAL_GROUP_MEMBERSHIP' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4798, 4799) }'
+    'RDP_LOGIN_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4624, 4778) } | Where-Object { $_.Properties[8].Value -eq 10 }'
+    'ALL_RDP_LOGIN_HISTORY' = 'Get-WinEvent -LogName ''Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'' -FilterXPath ''<QueryList><Query Id="0"><Select>*[System[EventID=1149]]</Select></Query></QueryList>'''
+    'ALL_OUTGOING_RDP_CONNECTION_HISTORY' = 'Get-WinEvent -FilterHashTable @{ LogName = ''Microsoft-Windows-TerminalServices-RDPClient/Operational''; ID = ''1102'' } | Select-Object $properties'
+    'USER_CREATION_ACTIVITY' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4720) }'
+    'PASSWORD_RESET_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4724) }'
+    'USERS_ADDED_TO_GROUP' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4732, 4728) }'
+    'USER_ENABLING_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4722) }'
+    'USER_DISABLING_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4723) }'
+    'USER_DELETION_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4726) }'
+    'USER_LOCKOUT_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4740) }'
+    'CREDMAN_BACKUP_ACTIVITY' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(5376) }'
+    'CREDMAN_RESTORE_ACTIVITY' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(5377) }'
+    'SUCCESSFUL_LOGON_EVENTS' = 'Get-EventLog -LogName Security -InstanceId 4624 -Newest 1000'
+    'FAILED_LOGON_EVENTS' = 'Get-EventLog -LogName Security -InstanceId 4625 -Newest 1000'
+    'OBJECT_ACCESS_EVENTS' = @'
+$Query = @"
+<QueryList>
+  <Query Path="Security">
+    <Select Path="Security">*[System[(EventID=4656 or EventID=4663)]]</Select>
+  </Query>
+</QueryList>
+"@
+
+Get-WinEvent -FilterXml $Query -ErrorAction Stop
+'@
+    'PROCESS_EXECUTION_EVENTS' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; Id = 4688, 4689; StartTime = $startDate; EndTime = $endDate } -ErrorAction Stop'
+    'RANSOMWARE_NOTES' = 'Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object { $ransomNoteSet.Contains($_.Name) }'
+    'RANSOMWARE_EXTENSION' = 'Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object { $ransomExtensionSet.Count -gt 0 -and $ransomExtensionSet.Contains($_.Extension.ToLower()) }'
+    'HIGH_ENTROPY_FILES' = @'
+Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Length -gt 10240 -and -not $excludedEntropyExtensions.Contains($_.Extension.ToLower()) } |
+    ForEach-Object { Get-FileEntropy $_.FullName $_.Length }
+'@
+    'SHADOW_COPY_DELETION' = @'
+Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688; StartTime = (Get-Date).AddDays(-7) }
+Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; StartTime = (Get-Date).AddDays(-7) }
+& bcdedit /enum {current}
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'vssadmin.*delete|wmic.*shadowcopy.*delete|wbadmin.*delete|diskshadow' }
+'@
+    'SIGMA_RULES' = 'Invoke-SigmaScan -BundlePath $sigmaBundlePath -DaysBack 30 -MinLevel "medium"'
+  }
+}
+
+$ForensicatorDetectionCommandsJson = Get-ForensicatorDetectionCommandsMap | ConvertTo-Json -Depth 6
+
+# ---- JAVASCRIPT (MAPPING + RENDERER) ----
+$Global:FI_Scripts = @'
+<script>
+
+const ForensicatorDocs = {
+
+  "CURRENT_USER_INFORMATION": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "Current User Information"
+  },
+  "SYSTEM_DETAILS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "System Details"
+  },
+  "LOGON_SESSIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "Logon Sessions"
+  },
+  "USER_PROCESSES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "User Processes"
+  },
+  "USER_PROFILES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "User Profiles"
+  },
+  "ADMINISTRATOR_ACCOUNTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "Administrator Accounts"
+  },
+  "LOCAL_GROUPS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
+    "title": "Local Groups"
+  },
+  "INSTALLED_PROGRAMS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Installed Programs"
+  },
+  "ENVIRONMENT_VARIABLES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Environment Variables"
+  },
+  "OPERATING_SYSTEM_INFORMATION": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Operating System Information"
+  },
+  "HOTFIXES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Hotfixes (Patches)"
+  },
+  "WINDOWS_DEFENDER_STATUS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Windows Defender Status"
+  },
+  "PROCESSES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
+    "title": "Processes"
+  },
+  "STARTUP_PROGRAMS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
+    "title": "Startup Programs"
+  },
+  "SCHEDULED_TASKS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
+    "title": "Scheduled Tasks"
+  },
+  "SERVICES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
+    "title": "Services"
+  },
+  "REGISTRY_PERSISTENCE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
+    "title": "registry persistence"
+  },
+  "DNS_CACHE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "DNS Cache"
+  },
+  "NETWORK_CONNECTIONS_AND_SESSIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Network Connections and Sessions"
+  },
+  "FIREWALL_RULES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Firewall Rules"
+  },
+  "WIRELESS_NETWORKS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Wireless Networks"
+  },
+  "IP_ROUTING_INFORMATION": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "IP Routing Information"
+  },
+  "NETWORK_ADAPTERS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Network Adapters and Configuration"
+  },
+  "SMB_SESSIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "SMB Sessions"
+  },
+  "SMB_SHARES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "SMB Shares"
+  },
+  "ARP_CACHE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Address Resolution Protocol Cache"
+  },
+  "IP_CONFIGURATION": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Current IP Configuration"
+  },
+  "GPO_REPORT": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "Group Policy Report (GPOReport.html)"
+  },
+  "RAM_CAPTURE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "WINPMEM RAM CAPTURE (/RAM)"
+  },
+  "BROWSING_HISTORY": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "Browsing History Dump (/BROWSING_HISTORY)"
+  },
+  "NETWORK_TRACE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "Network Trace (/PCAP)"
+  },
+  "OTHER_COLLECTIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "Other Collections"
+  },
+  "SIGMA_RULES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/detections.json",
+    "title": "Sigma Rules"
+  },
+  "RANSOMWARE_ARTIFACTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/detections.json",
+    "title": "Ransomware Artifacts"
+  },
+  "MALICIOUS_HASH_CHECK": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/detections.json",
+    "title": "Malicious Hash Check"
+  },
+  "LOGON_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Logon Events (Security Log)"
+  },
+  "PROCESS_EXECUTION_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Process Execution Events (Security Log)"
+  },
+  "USER_AND_GROUP_MANAGEMENT_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "User and Group Management Events (Security Log)"
+  },
+  "OBJECT_ACCESS_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Object Access Events (Security Log)"
+  },
+  "USER_LOCKOUT_ACTIVITIES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "User LockOut Activities (Security Log)"
+  },
+  "CREDENTIAL_MANAGER_ACTIVITIES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Credential Manager Activities (Security Log)"
+  },
+  "DEVICE_AND_DRIVE_INFORMATION": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
+    "title": "Device and Drive Information"
+  },
+  "POWERSHELL_COMMAND_HISTORY": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
+    "title": "PowerShell Command History"
+  },
+  "EXECUTABLES_IN_UNUSUAL_LOCATIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
+    "title": "Executables in Unusual Locations"
+  },
+  "LINK_FILES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
+    "title": "All Link Files Created in the last 180days"
+  }
+
+};
+
+const ForensicatorDocAliases = {
+  "CURRENT_USER_INFORMATION": "CURRENT_USER_INFORMATION",
+  "SYSTEM_DETAILS": "SYSTEM_DETAILS",
+  "LOGON_SESSIONS": "LOGON_SESSIONS",
+  "USER_PROCESSES": "USER_PROCESSES",
+  "USER_PROFILE": "USER_PROFILES",
+  "USER_PROFILES": "USER_PROFILES",
+  "ADMINISTRATOR_ACCOUNTS": "ADMINISTRATOR_ACCOUNTS",
+  "LOCAL_GROUPS": "LOCAL_GROUPS",
+  "INSTALLED_PROGRAMS": "INSTALLED_PROGRAMS",
+  "INSTALLED_PROGRAMS_REGISTRY": "INSTALLED_PROGRAMS",
+  "ENVIRONMENT_VARIABLES": "ENVIRONMENT_VARIABLES",
+  "SYSTEM_INFORMATION": "OPERATING_SYSTEM_INFORMATION",
+  "OPERATING_SYSTEM_INFORMATION": "OPERATING_SYSTEM_INFORMATION",
+  "HOTFIXES": "HOTFIXES",
+  "WINDOWS_DEFENDER_STATUS": "WINDOWS_DEFENDER_STATUS",
+  "PROCESSES": "PROCESSES",
+  "STARTUP_PROGRAMS": "STARTUP_PROGRAMS",
+  "SCHEDULED_TASK": "SCHEDULED_TASKS",
+  "SCHEDULED_TASK_STATE": "SCHEDULED_TASKS",
+  "SERVICES": "SERVICES",
+  "REGRUN": "REGISTRY_PERSISTENCE",
+  "REGRUNONCE": "REGISTRY_PERSISTENCE",
+  "REGRUNONCEEX": "REGISTRY_PERSISTENCE",
+  "DNS_CACHE": "DNS_CACHE",
+  "NETWORK_ADAPTERS": "NETWORK_ADAPTERS",
+  "IP_CONFIGURATION": "IP_CONFIGURATION",
+  "NETWORK_ADAPTER_IP_ADDRESS": "IP_CONFIGURATION",
+  "NETWORK_CONNECTION_PROFILE": "IP_CONFIGURATION",
+  "NETWORK_ADAPTERS_BANDWIDTH": "IP_CONFIGURATION",
+  "ARP_CACHE": "ARP_CACHE",
+  "TCP_CONNECTIONS": "NETWORK_CONNECTIONS_AND_SESSIONS",
+  "LOCAL_ADDRESS": "NETWORK_CONNECTIONS_AND_SESSIONS",
+  "SMB_SESSIONS": "SMB_SESSIONS",
+  "SMB_SHARES": "SMB_SHARES",
+  "FIREWALL_RULES": "FIREWALL_RULES",
+  "WIFI_NETWORKS_PASSWORDS": "WIRELESS_NETWORKS",
+  "IP_ROUTE_NON_LOCAL": "IP_ROUTING_INFORMATION",
+  "NETWORK_ADAPTERS_IP_ROUTE": "IP_ROUTING_INFORMATION",
+  "IP_HOPS": "IP_ROUTING_INFORMATION",
+  "GROUP_POLICY_REPORT": "GPO_REPORT",
+  "WINPMEM_RAM_CAPTURE": "RAM_CAPTURE",
+  "BROWSING_HISTORY_DUMP": "BROWSING_HISTORY",
+  "NETWORK_TRACE": "NETWORK_TRACE",
+  "EVENT_LOGS": "OTHER_COLLECTIONS",
+  "IIS_LOGS": "OTHER_COLLECTIONS",
+  "TOMCAT_LOGS": "OTHER_COLLECTIONS",
+  "LOG4J": "OTHER_COLLECTIONS",
+  "MATCHED_HASHES": "OTHER_COLLECTIONS",
+  "SIGMA_RULES": "SIGMA_RULES",
+  "MALICIOUS_HASH_CHECK": "MALICIOUS_HASH_CHECK",
+  "RANSOMWARE_NOTES": "RANSOMWARE_ARTIFACTS",
+  "HIGH_ENTROPY_FILES": "RANSOMWARE_ARTIFACTS",
+  "RANSOMWARE_EXTENSION": "RANSOMWARE_ARTIFACTS",
+  "SHADOW_COPY_DELETION": "RANSOMWARE_ARTIFACTS",
+  "RDP_LOGIN_ACTIVITIES": "LOGON_EVENTS",
+  "ALL_RDP_LOGIN_HISTORY": "LOGON_EVENTS",
+  "ALL_OUTGOING_RDP_CONNECTION_HISTORY": "LOGON_EVENTS",
+  "SUCCESSFUL_LOGON_EVENTS": "LOGON_EVENTS",
+  "FAILED_LOGON_EVENTS": "LOGON_EVENTS",
+  "LOCAL_GROUP_MEMBERSHIP": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "USER_CREATION_ACTIVITY": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "PASSWORD_RESET_ACTIVITIES": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "USERS_ADDED_TO_GROUP": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "USER_ENABLING_ACTIVITIES": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "USER_DISABLING_ACTIVITIES": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "USER_DELETION_ACTIVITIES": "USER_AND_GROUP_MANAGEMENT_EVENTS",
+  "USER_LOCKOUT_ACTIVITIES": "USER_LOCKOUT_ACTIVITIES",
+  "CREDMAN_BACKUP_ACTIVITY": "CREDENTIAL_MANAGER_ACTIVITIES",
+  "CREDMAN_RESTORE_ACTIVITY": "CREDENTIAL_MANAGER_ACTIVITIES",
+  "PROCESS_EXECUTION_EVENTS": "PROCESS_EXECUTION_EVENTS",
+  "OBJECT_ACCESS_EVENTS": "OBJECT_ACCESS_EVENTS",
+  "DEVICE_AND_DRIVE_INFORMATION": "DEVICE_AND_DRIVE_INFORMATION",
+  "LOGICAL_DRIVES": "DEVICE_AND_DRIVE_INFORMATION",
+  "USB_DEVICES": "DEVICE_AND_DRIVE_INFORMATION",
+  "WEBCAMS": "DEVICE_AND_DRIVE_INFORMATION",
+  "UPNP_DEVICES": "DEVICE_AND_DRIVE_INFORMATION",
+  "PREVIOUSLY_CONNECTED_DRIVES": "DEVICE_AND_DRIVE_INFORMATION",
+  "BITLOCKER_DRIVES": "DEVICE_AND_DRIVE_INFORMATION",
+  "POWERSHELL_COMMAND_HISTORY": "POWERSHELL_COMMAND_HISTORY",
+  "POWERSHELL_HISTORY": "POWERSHELL_COMMAND_HISTORY",
+  "EXECUTABLES_IN_UNUSUAL_LOCATIONS": "EXECUTABLES_IN_UNUSUAL_LOCATIONS",
+  "DOWNLOADS": "EXECUTABLES_IN_UNUSUAL_LOCATIONS",
+  "APPDATA": "EXECUTABLES_IN_UNUSUAL_LOCATIONS",
+  "EXECS_IN_TEMP": "EXECUTABLES_IN_UNUSUAL_LOCATIONS",
+  "PERFLOGS": "EXECUTABLES_IN_UNUSUAL_LOCATIONS",
+  "DOCUMENTS": "EXECUTABLES_IN_UNUSUAL_LOCATIONS",
+  "LINK_FILES": "LINK_FILES"
+};
+
+const ForensicatorDetectionCommands = __FI_DETECTION_COMMANDS__;
+
+// Cache (performance boost)
+const fiCache = {};
+
+function resolveDocConfig(key) {
+  const canonicalKey = ForensicatorDocAliases[key] || key;
+  return ForensicatorDocs[canonicalKey] || null;
+}
+
+function resolveDetectionCommand(key) {
+  const canonicalKey = ForensicatorDocAliases[key] || key;
+  return ForensicatorDetectionCommands[key] || ForensicatorDetectionCommands[canonicalKey] || null;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, function (char) {
+    return {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    }[char];
+  });
+}
+
+function hasContent(value) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.some(item => hasContent(item));
+  }
+  if (typeof value === "object") {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
+function renderMitreItem(item) {
+  if (!item || typeof item !== "object") {
+    return `<li>${escapeHtml(item)}</li>`;
+  }
+  const tactic = escapeHtml(item.tactic || "");
+  const description = escapeHtml(item.description || "");
+  if (tactic && description) {
+    return `<li><strong>${tactic}</strong>: ${description}</li>`;
+  }
+  return `<li>${tactic || description}</li>`;
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "absolute";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
+}
+
+function setCopyState(button, label) {
+  if (!button.dataset.originalLabel) {
+    button.dataset.originalLabel = button.textContent.trim() || "Copy";
+  }
+
+  button.textContent = label;
+  button.classList.add("copied");
+  window.clearTimeout(button._copyTimer);
+  button._copyTimer = window.setTimeout(() => {
+    button.textContent = button.dataset.originalLabel;
+    button.classList.remove("copied");
+  }, 1600);
+}
+
+function normalizeSection(section) {
+  const source = section && typeof section === "object" ? section : {};
+  const overview = source.overview && typeof source.overview === "object" ? source.overview : {};
+  const analysis = source.analysis && typeof source.analysis === "object" ? source.analysis : {};
+  const aiAnalysis = source.ai_analysis && typeof source.ai_analysis === "object" ? source.ai_analysis : {};
+
+  return {
+    title: source.title || "Detection Details",
+    overview: {
+      summary: overview.summary ?? null,
+      why_it_matters: overview.why_it_matters ?? null
+    },
+    analysis: {
+      detection: analysis.detection ?? null,
+      what_to_look_out_for: analysis.what_to_look_out_for ?? null,
+      mitre_mapping: analysis.mitre_mapping ?? null
+    },
+    ai_analysis: {
+      forensicator_ai: aiAnalysis.forensicator_ai ?? null
+    }
+  };
+}
+
+function renderTextBlock(title, value) {
+  if (!hasContent(value)) {
+    return "";
+  }
+  if (Array.isArray(value)) {
+    return renderListBlock(title, value);
+  }
+  const safeValue = escapeHtml(value).replace(/\r?\n/g, "<br>");
+  return `<div class="fi-block">
+    <h3>${escapeHtml(title)}</h3>
+    <p>${safeValue}</p>
+  </div>`;
+}
+
+function renderCodeBlock(title, value) {
+  if (!hasContent(value)) {
+    return "";
+  }
+  const safeValue = escapeHtml(String(value).replace(/\r\n/g, "\n"));
+  return `<div class="fi-block">
+    <div class="fi-block-header">
+      <h3>${escapeHtml(title)}</h3>
+      <button type="button" class="fi-copy-btn">Copy</button>
+    </div>
+    <pre class="fi-code"><code>${safeValue}</code></pre>
+  </div>`;
+}
+
+function renderListBlock(title, values) {
+  const items = (Array.isArray(values) ? values : [values]).filter(item => hasContent(item));
+  if (!items.length) {
+    return "";
+  }
+  return `<div class="fi-block">
+    <h3>${escapeHtml(title)}</h3>
+    <ul>
+      ${items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+    </ul>
+  </div>`;
+}
+
+function renderMitreBlock(title, values) {
+  const items = (Array.isArray(values) ? values : [values]).filter(item => hasContent(item));
+  if (!items.length) {
+    return "";
+  }
+  return `<div class="fi-block">
+    <h3>${escapeHtml(title)}</h3>
+    <ul>
+      ${items.map(item => renderMitreItem(item)).join("")}
+    </ul>
+  </div>`;
+}
+
+function buildTabs(section, key) {
+  const normalized = normalizeSection(section);
+  const detectionCommand = resolveDetectionCommand(key);
+  if (hasContent(detectionCommand)) {
+    normalized.analysis.detection = detectionCommand;
+  }
+  const tabs = [];
+
+  const overviewHtml =
+    renderTextBlock("Summary", normalized.overview.summary) +
+    renderTextBlock("Why It Matters", normalized.overview.why_it_matters);
+
+  if (overviewHtml) {
+    tabs.push({
+      id: "overview",
+      label: "Overview",
+      html: overviewHtml
+    });
+  }
+
+  const analysisHtml =
+    renderCodeBlock("Detection", normalized.analysis.detection) +
+    renderListBlock("What to Look Out For", normalized.analysis.what_to_look_out_for) +
+    renderMitreBlock("Mitre Mapping", normalized.analysis.mitre_mapping);
+
+  if (analysisHtml) {
+    tabs.push({
+      id: "analysis",
+      label: "Analysis",
+      html: analysisHtml
+    });
+  }
+
+  const aiHtml = renderTextBlock("Forensicator AI", normalized.ai_analysis.forensicator_ai);
+
+  if (aiHtml) {
+    tabs.push({
+      id: "ai-analysis",
+      label: "AI Analysis",
+      html: aiHtml
+    });
+  }
+
+  return {
+    normalized,
+    tabs
+  };
+}
+
+function setActiveTab(tabId) {
+  document.querySelectorAll("#fi-panel-tabs .fi-tab").forEach(button => {
+    button.classList.toggle("active", button.dataset.tab === tabId);
+  });
+  document.querySelectorAll("#fi-panel-content .fi-tab-panel").forEach(panel => {
+    panel.classList.toggle("active", panel.dataset.tabPanel === tabId);
+  });
+}
+
+function renderPanelState(title, tabs, fallbackHtml) {
+  const tabsContainer = document.getElementById("fi-panel-tabs");
+  const content = document.getElementById("fi-panel-content");
+
+  document.getElementById("fi-panel-title").innerText = title;
+
+  if (!tabs.length) {
+    tabsContainer.innerHTML = "";
+    content.innerHTML = `<div class="fi-message">${fallbackHtml}</div>`;
+    return;
+  }
+
+  tabsContainer.innerHTML = tabs.map((tab, index) => `
+    <button type="button" class="fi-tab${index === 0 ? " active" : ""}" data-tab="${tab.id}">
+      ${escapeHtml(tab.label)}
+    </button>
+  `).join("");
+
+  content.innerHTML = tabs.map((tab, index) => `
+    <div class="fi-tab-panel${index === 0 ? " active" : ""}" data-tab-panel="${tab.id}">
+      ${tab.html}
+    </div>
+  `).join("");
+}
+
+function showPanelMessage(title, html) {
+  const panel = document.getElementById("fi-panel");
+  panel.classList.add("open");
+  renderPanelState(title, [], html);
+}
+
+async function openPanelFromJSON(url, title, key) {
+  const panel = document.getElementById("fi-panel");
+  panel.classList.add("open");
+  renderPanelState(title, [], "Loading...");
+
+  try {
+    let data;
+
+    if (fiCache[url]) {
+      data = fiCache[url];
+    } else {
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      data = await res.json();
+      fiCache[url] = data;
+    }
+
+    const section = data.find(i => i.title === title);
+
+    if (!section) {
+      renderPanelState(title, [], "No documentation found.");
+      return;
+    }
+
+    const panelState = buildTabs(section, key);
+    renderPanelState(panelState.normalized.title, panelState.tabs, "No documentation found.");
+
+  } catch (err) {
+    console.error("Failed to load documentation:", err);
+    renderPanelState(title, [], "Failed to load documentation.<br>Ensure the JSON source is reachable from this machine.");
+  }
+}
+
+function closePanel() {
+  document.getElementById("fi-panel").classList.remove("open");
+}
+
+// Global click handler (NO HARDCODING IN HTML)
+document.addEventListener("click", function(e) {
+  const copyButton = e.target.closest(".fi-copy-btn");
+  if (copyButton) {
+    const codeNode = copyButton.closest(".fi-block")?.querySelector(".fi-code code");
+    if (!codeNode) {
+      return;
+    }
+
+    copyTextToClipboard(codeNode.innerText)
+      .then(() => setCopyState(copyButton, "Copied"))
+      .catch(() => setCopyState(copyButton, "Copy failed"));
+    return;
+  }
+
+  const tab = e.target.closest(".fi-tab");
+  if (tab) {
+    setActiveTab(tab.dataset.tab);
+    return;
+  }
+
+  const el = e.target.closest(".fd-info-trigger");
+  if (!el) return;
+
+  const key = el.dataset.detection;
+  const config = resolveDocConfig(key);
+
+  if (!config) {
+    showPanelMessage("Detection Details", `No documentation mapping configured for <code>${escapeHtml(key)}</code>.`);
+    console.warn("No mapping for:", key);
+    return;
+  }
+
+  openPanelFromJSON(config.url, config.title, key);
+});
+
+</script>
+'@
+
+$Global:FI_Scripts = $Global:FI_Scripts.Replace('__FI_DETECTION_COMMANDS__', $ForensicatorDetectionCommandsJson)
+
+# ---- HELPER FUNCTION (ICON) ----
+function New-FIIcon {
+    param($Key)
+
+    return "<span class='fd-info-trigger' data-detection='$Key' data-tooltip='View investigation guidance'>ⓘ</span>"
+}
+
+
+
+
+
+
+###########################################################################################################
+#region ########################## CREATING AND FORMATTING THE HTML FILES  ################################
+###########################################################################################################
+
+Write-ForensicLog "[*] Creating and Formatting the HTML files" -Level INFO -Section "CORE"
+
+
+function ForensicatorIndex {
+
+  @"
+
+$Style_Head
+
+$Style_Menu
+
+
 <div class="mobile-menu-overlay"></div>
 <div class="main-container">
 <div class="pd-ltr-20 xs-pd-20-10">
@@ -5833,6 +6339,8 @@ Index
 </div>
 </div>
 </div>
+
+
 <div class="main-container">
 <div class="pd-ltr-20">
 <div class="card-box pd-20 height-100-p mb-30">
@@ -5925,65 +6433,11 @@ Analysis Start and end time is also recorded.
 </div>
 <!-- Export Datatable End -->
 </div>
-<div class="footer-wrap pd-20 mb-20 card-box">
-Live Forensicator - Coded By
-<a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-</div>
-</div>
-</div>
-<!-- js -->
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-<!-- buttons for Export datatable -->
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-<!-- Datatable Setting js -->
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-</body>
-</html>
+
+
+
+$Style_Footer
+
 
 "@
 }
@@ -6000,205 +6454,14 @@ function NetworkStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
+
+  $Style_Head
 
 
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Menu
+
+
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -6215,7 +6478,7 @@ function NetworkStyle {
                     <a href="index.html">Home</a>
                   </li>
                   <li class="breadcrumb-item active" aria-current="page">
-                    Users-Accounts
+                    Network-Information
                   </li>
                 </ol>
               </nav>
@@ -6225,7 +6488,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">DNS Cache</h4>
+            <h4 class="text-blue h4">DNS Cache $(New-FIIcon -Key "DNS_CACHE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6249,7 +6512,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Network Adapters</h4>
+            <h4 class="text-blue h4">Network Adapters $(New-FIIcon -Key "NETWORK_ADAPTERS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6276,7 +6539,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Current IP Configuration</h4>
+            <h4 class="text-blue h4">Current IP Configuration $(New-FIIcon -Key "IP_CONFIGURATION")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6301,7 +6564,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Network Adapter IP Address - IPv4 & IPv6</h4>
+            <h4 class="text-blue h4">Network Adapter IP Address - IPv4 & IPv6 $(New-FIIcon -Key "NETWORK_ADAPTER_IP_ADDRESS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6324,7 +6587,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Network Connection Profile</h4>
+            <h4 class="text-blue h4">Network Connection Profile $(New-FIIcon -Key "NETWORK_CONNECTION_PROFILE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6348,7 +6611,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Network Adapters & Bandwidth</h4>
+            <h4 class="text-blue h4">Network Adapters & Bandwidth $(New-FIIcon -Key "NETWORK_ADAPTERS_BANDWIDTH")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6372,7 +6635,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Addres Resolution Protocol Cache</h4>
+            <h4 class="text-blue h4">Address Resolution Protocol Cache $(New-FIIcon -Key "ARP_CACHE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6394,7 +6657,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Current TCP Connections and Associated Processes</h4>
+            <h4 class="text-blue h4">Current TCP Connections and Associated Processes $(New-FIIcon -Key "TCP_CONNECTIONS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6419,7 +6682,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Associated WIFI Networks and Passwords</h4>
+            <h4 class="text-blue h4">Associated WIFI Networks and Passwords $(New-FIIcon -Key "WIFI_NETWORKS_PASSWORDS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6440,7 +6703,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Current Firewall Rules</h4>
+            <h4 class="text-blue h4">Current Firewall Rules $(New-FIIcon -Key "FIREWALL_RULES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6467,7 +6730,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Outbound SMB Sessions</h4>
+            <h4 class="text-blue h4">Outbound SMB Sessions $(New-FIIcon -Key "SMB_SESSIONS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6493,7 +6756,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Active SMB Sessions (If Device is a Server)</h4>
+            <h4 class="text-blue h4">Active SMB Sessions (If Device is a Server) $(New-FIIcon -Key "SMB_SESSIONS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6516,7 +6779,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Active SMB Shares on this device</h4>
+            <h4 class="text-blue h4">Active SMB Shares on this device $(New-FIIcon -Key "SMB_SHARES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6538,7 +6801,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">IP Route to non local Destination</h4>
+            <h4 class="text-blue h4">IP Route to non local Destination $(New-FIIcon -Key "IP_ROUTE_NON_LOCAL")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6563,7 +6826,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Network adapters with IP Route to non local Destination</h4>
+            <h4 class="text-blue h4">Network adapters with IP Route to non local Destination $(New-FIIcon -Key "NETWORK_ADAPTERS_IP_ROUTE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6588,7 +6851,7 @@ function NetworkStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Ip hops with valid infINFOe lifetime</h4>
+            <h4 class="text-blue h4">Ip hops with valid infinite lifetime $(New-FIIcon -Key "IP_HOPS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6613,68 +6876,7 @@ function NetworkStyle {
 
 
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -6693,203 +6895,9 @@ function UserStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $Style_Menu
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -6916,7 +6924,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Current User Information</h4>
+            <h4 class="text-blue h4">Current User Information $(New-FIIcon -Key "CURRENT_USER_INFORMATION")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6942,7 +6950,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">System Details</h4>
+            <h4 class="text-blue h4">System Details $(New-FIIcon -Key "SYSTEM_DETAILS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6969,7 +6977,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Logon Sessions</h4>
+            <h4 class="text-blue h4">Logon Sessions $(New-FIIcon -Key "LOGON_SESSIONS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -6994,7 +7002,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Processes</h4>
+            <h4 class="text-blue h4">User Processes $(New-FIIcon -Key "USER_PROCESSES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap ">
@@ -7020,7 +7028,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Profile</h4>
+            <h4 class="text-blue h4">User Profile $(New-FIIcon -Key "USER_PROFILE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7042,7 +7050,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Administrator Accounts</h4>
+            <h4 class="text-blue h4">Administrator Accounts $(New-FIIcon -Key "ADMINISTRATOR_ACCOUNTS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7064,7 +7072,7 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Local Groups</h4>
+            <h4 class="text-blue h4">Local Groups $(New-FIIcon -Key "LOCAL_GROUPS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7085,68 +7093,7 @@ function UserStyle {
 
 
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -7164,203 +7111,9 @@ function SystemStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $Style_Menu 
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -7377,7 +7130,7 @@ function SystemStyle {
                     <a href="index.html">Home</a>
                   </li>
                   <li class="breadcrumb-item active" aria-current="page">
-                    Users-Accounts
+                    System-Information
                   </li>
                 </ol>
               </nav>
@@ -7387,7 +7140,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Installed Programs</h4>
+            <h4 class="text-blue h4">Installed Programs $(New-FIIcon -Key "INSTALLED_PROGRAMS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7415,7 +7168,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Installed Programs - From Registry</h4>
+            <h4 class="text-blue h4">Installed Programs - From Registry $(New-FIIcon -Key "INSTALLED_PROGRAMS_REGISTRY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7438,7 +7191,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Environment Variables</h4>
+            <h4 class="text-blue h4">Environment Variables $(New-FIIcon -Key "ENVIRONMENT_VARIABLES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7459,7 +7212,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">System Information</h4>
+            <h4 class="text-blue h4">System Information $(New-FIIcon -Key "SYSTEM_INFORMATION")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7490,7 +7243,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Operating System Information</h4>
+            <h4 class="text-blue h4">Operating System Information $(New-FIIcon -Key "OPERATING_SYSTEM_INFORMATION")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7524,7 +7277,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Hotfixes</h4>
+            <h4 class="text-blue h4">Hotfixes $(New-FIIcon -Key "HOTFIXES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7549,7 +7302,7 @@ function SystemStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Windows Defender Status</h4>
+            <h4 class="text-blue h4">Windows Defender Status $(New-FIIcon -Key "WINDOWS_DEFENDER_STATUS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7579,68 +7332,7 @@ function SystemStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -7660,203 +7352,9 @@ function ProcessStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $Style_Menu
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -7873,7 +7371,7 @@ function ProcessStyle {
                     <a href="index.html">Home</a>
                   </li>
                   <li class="breadcrumb-item active" aria-current="page">
-                    Users-Accounts
+                    System-Processes
                   </li>
                 </ol>
               </nav>
@@ -7883,7 +7381,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Processes</h4>
+            <h4 class="text-blue h4">Processes $(New-FIIcon -Key "PROCESSES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7912,7 +7410,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Startup Programs</h4>
+            <h4 class="text-blue h4">Startup Programs $(New-FIIcon -Key "STARTUP_PROGRAMS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7935,7 +7433,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Scheduled Task</h4>
+            <h4 class="text-blue h4">Scheduled Task $(New-FIIcon -Key "SCHEDULED_TASK")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7957,7 +7455,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Scheduled Task & State</h4>
+            <h4 class="text-blue h4">Scheduled Task & State $(New-FIIcon -Key "SCHEDULED_TASK_STATE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -7983,7 +7481,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Services</h4>
+            <h4 class="text-blue h4">Services $(New-FIIcon -Key "SERVICES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8007,7 +7505,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Persistance in RegRun Registry</h4>
+            <h4 class="text-blue h4">Persistance in RegRun Registry $(New-FIIcon -Key "REGRUN")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8027,7 +7525,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Persistance in RegRunOnce Registry</h4>
+            <h4 class="text-blue h4">Persistance in RegRunOnce Registry $(New-FIIcon -Key "REGRUNONCE")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8047,7 +7545,7 @@ function ProcessStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Persistance in RegRunOnceEx Registry</h4>
+            <h4 class="text-blue h4">Persistance in RegRunOnceEx Registry $(New-FIIcon -Key "REGRUNONCEEX")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8064,68 +7562,7 @@ function ProcessStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -8143,203 +7580,9 @@ function OthersStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $Style_Menu
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -8366,7 +7609,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Logical Drives</h4>
+            <h4 class="text-blue h4">Logical Drives $(New-FIIcon -Key "LOGICAL_DRIVES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8390,7 +7633,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">USB Devices</h4>
+            <h4 class="text-blue h4">USB Devices $(New-FIIcon -Key "USB_DEVICES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8414,7 +7657,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Connected & Disconnected Webcams</h4>
+            <h4 class="text-blue h4">Connected & Disconnected Webcams $(New-FIIcon -Key "WEBCAMS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8437,7 +7680,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">UPNPDevices</h4>
+            <h4 class="text-blue h4">UPNPDevices $(New-FIIcon -Key "UPNP_DEVICES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8460,7 +7703,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">All Previously Connected Drives</h4>
+            <h4 class="text-blue h4">All Previously Connected Drives $(New-FIIcon -Key "PREVIOUSLY_CONNECTED_DRIVES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8483,7 +7726,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">All Link Files Created in the last 180days</h4>
+            <h4 class="text-blue h4">All Link Files Created in the last 180days $(New-FIIcon -Key "LINK_FILES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8506,7 +7749,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">500Days Powershell History</h4>
+            <h4 class="text-blue h4">500Days Powershell History $(New-FIIcon -Key "POWERSHELL_HISTORY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8527,7 +7770,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Executables in the Downloads folder</h4>
+            <h4 class="text-blue h4">Executables in the Downloads folder $(New-FIIcon -Key "DOWNLOADS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8552,7 +7795,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Executables In AppData</h4>
+            <h4 class="text-blue h4">Executables In AppData $(New-FIIcon -Key "APPDATA")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8577,7 +7820,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Executables In Temp</h4>
+            <h4 class="text-blue h4">Executables In Temp $(New-FIIcon -Key "EXECS_IN_TEMP")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8602,7 +7845,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Executables In Perflogs</h4>
+            <h4 class="text-blue h4">Executables In Perflogs $(New-FIIcon -Key "PERFLOGS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8627,7 +7870,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Executables In Documents Folder</h4>
+            <h4 class="text-blue h4">Executables In Documents Folder $(New-FIIcon -Key "DOCUMENTS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8652,7 +7895,7 @@ function OthersStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">BitLocker Drives</h4>
+            <h4 class="text-blue h4">BitLocker Drives $(New-FIIcon -Key "BITLOCKER_DRIVES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -8678,68 +7921,7 @@ function OthersStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -8760,196 +7942,9 @@ function ForensicatorExtras {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" class="dark-logo" />
-        <img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-download"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $Style_Menu
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -8979,7 +7974,7 @@ function ForensicatorExtras {
             <!-- Simple Datatable start -->
             <div class="card-box mb-30">
               <div class="pd-20">
-                <h4 class="text-blue h4">Extra Outputs</h4>
+                <h4 class="text-blue h4">Extra Outputs </h4>
                 <p class="mb-0">
                   Note: Not all checks will have a location output because the system might not meet the condition for the check.
                 </p>
@@ -8995,7 +7990,7 @@ function ForensicatorExtras {
                   <tbody>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">Group Policy Report</span>
+                        <span class="badge badge-pill table-badge">Group Policy Report $(New-FIIcon -Key "GROUP_POLICY_REPORT")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue"
@@ -9004,7 +7999,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">WINPMEM RAM CAPTURE</span>
+                        <span class="badge badge-pill table-badge">WINPMEM RAM CAPTURE $(New-FIIcon -Key "WINPMEM_RAM_CAPTURE")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue" href="RAM">/RAM</a>
@@ -9012,7 +8007,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">BROWSING HISTORY DUMP</span>
+                        <span class="badge badge-pill table-badge">BROWSING HISTORY DUMP $(New-FIIcon -Key "BROWSING_HISTORY_DUMP")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue" href="./BROWSING_HISTORY/">BROWSING HISTORY</a>
@@ -9021,7 +8016,7 @@ function ForensicatorExtras {
 
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">NETWORK TRACE</span>
+                        <span class="badge badge-pill table-badge">NETWORK TRACE $(New-FIIcon -Key "NETWORK_TRACE")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue"
@@ -9030,7 +8025,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">EVENT LOGS</span>
+                        <span class="badge badge-pill table-badge">EVENT LOGS $(New-FIIcon -Key "EVENT_LOGS")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue"
@@ -9039,7 +8034,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">IIS Logs</span>
+                        <span class="badge badge-pill table-badge">IIS Logs $(New-FIIcon -Key "IIS_LOGS")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue"
@@ -9048,7 +8043,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">TomCat Logs</span>
+                        <span class="badge badge-pill table-badge">TomCat Logs $(New-FIIcon -Key "TOMCAT_LOGS")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue"
@@ -9057,7 +8052,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">Discovered Log4j</span>
+                        <span class="badge badge-pill table-badge">Discovered Log4j $(New-FIIcon -Key "LOG4J")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue" href="LOG4J">/LOG4J</a>
@@ -9065,7 +8060,7 @@ function ForensicatorExtras {
                     </tr>
                     <tr>
                       <td class="table-plus">
-                        <span class="badge badge-pill table-badge">Matched Hashes</span>
+                        <span class="badge badge-pill table-badge">Matched Hashes $(New-FIIcon -Key "MATCHED_HASHES")</span>
                       </td>
                       <td>
                         <a target="_blank" class="text-blue" href="HashMatches">/HashMatches</a>
@@ -9081,70 +8076,9 @@ function ForensicatorExtras {
         </div>
         <!-- Export Datatable End -->
       </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
 
-  <!-- js -->
+  $Style_Footer
 
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-
-
-</body>
-
-</html>
 
 "@
 }
@@ -9161,132 +8095,8 @@ ForensicatorExtras | Out-File -FilePath $ForensicatorExtrasFile
 ##################################################################################################################
 ##################################################################################################################
 
+$Global:EVTX_Menu = @"
 
-#############################################################################################################
-#region   EVENT LOG ANALYSIS   USER ACTIVITIES        #######################################################
-#############################################################################################################
-
-function EvtxUserStyle {
-
-  @"
-
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
   <div class="left-side-bar header-white active">
     <div class="brand-logo">
       <a href="index.html">
@@ -9367,6 +8177,25 @@ function EvtxUserStyle {
       </div>
     </div>
   </div>
+
+"@
+
+#############################################################################################################
+#region   EVENT LOG ANALYSIS   USER ACTIVITIES        #######################################################
+#############################################################################################################
+
+function EvtxUserStyle {
+
+  @"
+
+  $Style_Head
+
+  $EVTX_Menu
+
+
+
+
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -9393,7 +8222,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">A user's local group membership was enumerated</h4>
+            <h4 class="text-blue h4">A user's local group membership was enumerated $(New-FIIcon -Key "LOCAL_GROUP_MEMBERSHIP")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9418,7 +8247,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">RDP Login Activities</h4>
+            <h4 class="text-blue h4">RDP Login Activities $(New-FIIcon -Key "RDP_LOGIN_ACTIVITIES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9441,7 +8270,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">All RDP Login History</h4>
+            <h4 class="text-blue h4">All RDP Login History $(New-FIIcon -Key "ALL_RDP_LOGIN_HISTORY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9464,7 +8293,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">All Outgoing RDP Connection History</h4>
+            <h4 class="text-blue h4">All Outgoing RDP Connection History $(New-FIIcon -Key "ALL_OUTGOING_RDP_CONNECTION_HISTORY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9486,7 +8315,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Creation Activity</h4>
+            <h4 class="text-blue h4">User Creation Activity $(New-FIIcon -Key "USER_CREATION_ACTIVITY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9508,7 +8337,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Password Reset Activities</h4>
+            <h4 class="text-blue h4">Password Reset Activities $(New-FIIcon -Key "PASSWORD_RESET_ACTIVITIES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9530,7 +8359,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Users Added to Group</h4>
+            <h4 class="text-blue h4">Users Added to Group $(New-FIIcon -Key "USERS_ADDED_TO_GROUP")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9552,7 +8381,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Enabling Activities</h4>
+            <h4 class="text-blue h4">User Enabling Activities $(New-FIIcon -Key "USER_ENABLING_ACTIVITIES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9574,7 +8403,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Disabling Activities</h4>
+            <h4 class="text-blue h4">User Disabling Activities $(New-FIIcon -Key "USER_DISABLING_ACTIVITIES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9596,7 +8425,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Deletion Activities</h4>
+            <h4 class="text-blue h4">User Deletion Activities $(New-FIIcon -Key "USER_DELETION_ACTIVITIES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9618,7 +8447,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User LockOut Activities</h4>
+            <h4 class="text-blue h4">User LockOut Activities $(New-FIIcon -Key "USER_LOCKOUT_ACTIVITIES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9640,7 +8469,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Credential Manager Backup Activity</h4>
+            <h4 class="text-blue h4">Credential Manager Backup Activity $(New-FIIcon -Key "CREDMAN_BACKUP_ACTIVITY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9662,7 +8491,7 @@ function EvtxUserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Credential Manager Restore Activity</h4>
+            <h4 class="text-blue h4">Credential Manager Restore Activity $(New-FIIcon -Key "CREDMAN_RESTORE_ACTIVITY")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -9681,68 +8510,7 @@ function EvtxUserStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -9760,203 +8528,10 @@ function LogonEventsStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $EVTX_Menu
+
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -9983,7 +8558,7 @@ function LogonEventsStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Successful Logon Events</h4>
+            <h4 class="text-blue h4">Successful Logon Events $(New-FIIcon -Key "SUCCESSFUL_LOGON_EVENTS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -10009,7 +8584,7 @@ function LogonEventsStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Failed Logon Events</h4>
+            <h4 class="text-blue h4">Failed Logon Events $(New-FIIcon -Key "FAILED_LOGON_EVENTS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -10030,68 +8605,7 @@ function LogonEventsStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -10112,203 +8626,9 @@ function ObjectEventsStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $EVTX_Menu
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -10336,7 +8656,7 @@ function ObjectEventsStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Object Access Events</h4>
+            <h4 class="text-blue h4">Object Access Events $(New-FIIcon -Key "OBJECT_ACCESS_EVENTS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -10360,68 +8680,7 @@ function ObjectEventsStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -10441,203 +8700,9 @@ function ProcessEventsStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
+  $Style_Head
+  $EVTX_Menu
+
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -10667,7 +8732,7 @@ function ProcessEventsStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Process Execution Events</h4>
+            <h4 class="text-blue h4">Process Execution Events $(New-FIIcon -Key "PROCESS_EXECUTION_EVENTS")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -10694,68 +8759,7 @@ function ProcessEventsStyle {
 
 
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -10774,205 +8778,9 @@ function DetectionStyle {
 
   @"
 
-<!DOCTYPE html>
-<html>
-<head>
-  <!-- Basic Page Info -->
-  <meta charset="utf-8" />
-  <title>Live Forensicator - Results for $Hostname</title>
-  <!-- Mobile Specific Metas -->
-  <meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-  <!-- Google Font -->
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-    rel="stylesheet" />
-  <!-- CSS -->
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-    onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-  <link rel="stylesheet" type="text/css"
-    href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-    onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-</head>
-<body>
-  <div class="pre-loader">
-    <div class="pre-loader-box">
-      <div class="loader-logo">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="../../styles/vendors/images/forensicator_logo.png" />
-      </div>
-      <div class="loader-progress" id="progress_div">
-        <div class="bar" id="bar1"></div>
-      </div>
-      <div class="percent" id="percent1">0%</div>
-      <div class="loading-text">Loading...</div>
-    </div>
-  </div>
-  <div class="header">
-    <div class="header-left">
-      <div class="menu-icon bi bi-list"></div>
-      <div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-      <div class="header-search">
-        <form>
-          <div class="form-group mb-0">
-            <i class="dw dw-search2 search-icon"></i>
-            <input type="text" class="form-control search-input" placeholder="Search Here" />
-            <div class="dropdown">
-              <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-                <i class="ion-arrow-down-c"></i>
-              </a>
-              <div class="dropdown-menu dropdown-menu-right">
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">From</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">To</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="form-group row">
-                  <label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-                  <div class="col-sm-12 col-md-10">
-                    <input class="form-control form-control-sm form-control-line" type="text" />
-                  </div>
-                </div>
-                <div class="text-right">
-                  <button class="btn btn-primary">Search</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </form>
-      </div>
-    </div>
-    <div class="header-right">
-      <div class="user-info-dropdown">
-        <div class="dropdown">
-          <a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-            <span class="bi bi-laptop" style="font-size: 1.50em;">
-            </span>
-            <span class="user-name">$Hostname</span>
-          </a>
-        </div>
-      </div>
-      <div class="github-link">
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img
-            src="https://raw.githubusercontent.com/Johnng007/Live-Forensicator/43c2392ad8f54a9e387f9926b9d60e434dd545f2/styles/vendors/images/github.svg"
-            alt="" /></a>
-      </div>
-    </div>
-  </div>
-  <div class="right-sidebar">
-    <div class="right-sidebar-body customscroll">
-      <div class="right-sidebar-body-content">
-        <h4 class="weight-600 font-18 pb-10">Header Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-        </div>
-        <h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-        <div class="sidebar-btn-group pb-30 mb-10">
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-          <a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
-      </div>
-    </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
+  $Style_Head
+  $Style_Menu
 
-            <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-
-
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
-      </div>
-    </div>
-  </div>
   <div class="mobile-menu-overlay"></div>
   <div class="main-container">
     <div class="pd-ltr-20 xs-pd-20-10">
@@ -11000,7 +8808,7 @@ function DetectionStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Malicious Hash Check </h4>
+            <h4 class="text-blue h4">Malicious Hash Check $(New-FIIcon -Key "MALICIOUS_HASH_CHECK")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -11030,7 +8838,7 @@ function DetectionStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Ransomware Notes</h4>
+            <h4 class="text-blue h4">Ransomware Notes $(New-FIIcon -Key "RANSOMWARE_NOTES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -11053,7 +8861,7 @@ function DetectionStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">High Entropy Files</h4>
+            <h4 class="text-blue h4">High Entropy Files $(New-FIIcon -Key "HIGH_ENTROPY_FILES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -11077,7 +8885,7 @@ function DetectionStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Ransomware Extension</h4>
+            <h4 class="text-blue h4">Ransomware Extension $(New-FIIcon -Key "RANSOMWARE_EXTENSION")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -11100,7 +8908,7 @@ function DetectionStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Shadow Copy Deletion</h4>
+            <h4 class="text-blue h4">Shadow Copy Deletion $(New-FIIcon -Key "SHADOW_COPY_DELETION")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -11122,7 +8930,7 @@ function DetectionStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">Sigma Rules</h4>
+            <h4 class="text-blue h4">Sigma Rules $(New-FIIcon -Key "SIGMA_RULES")</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap">
@@ -11147,68 +8955,7 @@ function DetectionStyle {
         </div>
         <!-- Export Datatable End -->
 
-        <!-- Export Datatable End -->
-      </div>
-      <div class="footer-wrap pd-20 mb-20 card-box">
-        Live Forensicator - Coded By
-        <a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-      </div>
-    </div>
-  </div>
-  <!-- js -->
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-  <script type="text/javascript"
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatablges/js/dataTables.buttons.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-  <!-- Datatable Setting js -->
-  <script
-    src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-  <script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-  <!-- buttons for Export datatable -->
-</body>
-</html>
+  $Style_Footer
 
 "@
 }
@@ -11552,13 +9299,3 @@ catch{ }
 
 Write-ForensicLog "Done - Happy Investigation" -Level SUCCESS -Section "CORE"
 
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-#endregion
-=======
-#endregion
->>>>>>> 742e95de46b078424489b2dc2bc9b7a43d18f575
-=======
-#endregion
->>>>>>> 742e95de46b078424489b2dc2bc9b7a43d18f575
