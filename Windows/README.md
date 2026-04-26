@@ -16,14 +16,14 @@ ___________                                .__               __
  \___  / \____/|__|    \___  >___|  /____  >__|\___  >____  /__|  \____/|__|   
      \/                    \/     \/     \/        \/     \/                    
 
-                                                                          v4.1.2
+                                                                          v4.1.3
 ```
 
 ---
 
 # 🤔 About
 
-**Forensicator (Windows)** is a PowerShell-based incident response and live forensics tool designed to assist investigators in rapidly collecting and analyzing system artifacts.
+**Forensicator (Windows)** is a PowerShell-based incident response and live forensics tool designed to assist investigators in rapidly collecting artifacts and analyzing systems for malicious activities.
 
 It enables:
 
@@ -41,28 +41,6 @@ Key capabilities include:
 
 ---
 
-# 📦 Optional Dependencies
-
-Forensicator works out-of-the-box, but additional features are enabled via external tools located in the `Forensicator-Share` folder.
-
-```bash
-winpmem_mini_x64_rc2.exe     → RAM acquisition (WinPmem)
-etl2pcapng64.exe             → Convert network trace to PCAPNG
-
-```
-
----
-
-# 📁 Additional Resources
-
-```bash
-sqlite3.exe                  → Helps with Browser History extraction
-SigmaRuntime.ps1             → Helps in processing Sigma Rules
-sigma-rules-precompiled.json → A precompiled updatable Sigma Ruleset easy to parse by the SigmaRuntime.
-```
-
----
-
 # 🔨 Usage
 
 ```powershell
@@ -72,60 +50,13 @@ git clone https://github.com/Johnng007/Live-Forensicator.git
 # Execute
 .\Forensicator.ps1 <parameters>
 ```
-
----
-
-# 🥊 Examples
-
-```powershell
-# Basic execution
-.\Forensicator.ps1
-
-# Version & updates
-.\Forensicator.ps1 -VERSION
-.\Forensicator.ps1 -UPDATE
-
-# Help
-.\Forensicator.ps1 -USAGE
-
-# Event log extraction
-.\Forensicator.ps1 -EVTX EVTX
-
-# RAM capture
-.\Forensicator.ps1 -RAM RAM
-
-# Network capture (PCAP)
-.\Forensicator.ps1 -PCAP PCAP
-
-# Web logs (IIS/Apache)
-.\Forensicator.ps1 -WEBLOGS WEBLOGS
-
-# Log4j detection
-.\Forensicator.ps1 -LOG4J LOG4J
-
-# Ransomware pattern detection
-.\Forensicator.ps1 -RANSOMWARE RANSOMWARE
-
-# Malware hash checking
-.\Forensicator.ps1 -HASHCHECK HASHCHECK
-
-# Encrypt artifacts
-.\Forensicator.ps1 -ENCRYPTED ENCRYPTED
-
-# Full collection
-.\Forensicator.ps1 -EVTX EVTX -RAM RAM -PCAP PCAP -WEBLOGS WEBLOGS
-
-# Unattended mode
-.\Forensicator.ps1 -OPERATOR "Name" -CASE 01123 -TITLE "Incident" -LOCATION "Location" -DEVICE HOSTNAME
-```
-
+<a href="https://forensicator.io/walkthrough.html">See full Usage</a>
 ---
 
 # ⚠️ Important Notes
 
 * Run as Administrator for full visibility
 * Execution may trigger IDS/IPS alerts
-* External threat intelligence may update during runtime
 * Configurable via `config.json`
 
 ---
@@ -224,20 +155,24 @@ Forensicator detects suspicious activity through:
 
 <img width="765" height="1127" src="https://github.com/user-attachments/assets/8e49146b-a1e4-4c28-8057-6071903baf75" />
 
+<img width="1398" height="390" alt="image" src="https://github.com/user-attachments/assets/c2d573d6-47fd-485f-8cf8-8c4ea082ff5e" />
+
+
 </details>
 
 <details>
 <summary>HTML Dashboard</summary>
 
-<img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML1.png?raw=true" />
+<img width="1392" height="913" alt="image" src="https://github.com/user-attachments/assets/60ab5fbb-0a84-4070-a5f1-901773e01096" />
 <br>
-<img width="1165" height="1037" src="https://github.com/user-attachments/assets/7a82d7a4-eac9-4c4c-8b12-193d77ed7640" />
+<img width="1383" height="908" alt="image" src="https://github.com/user-attachments/assets/c916c86f-10d2-4b24-8601-6cbd440baad3" />
 <br>
-<img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML3.png?raw=true" />
+<img width="1387" height="920" alt="image" src="https://github.com/user-attachments/assets/6cd350a4-830e-4513-922c-fc7140d13e71" />
 <br>
-<img width="1061" height="933" alt="image" src="https://github.com/user-attachments/assets/3e247456-f406-489f-b240-6acd992c8743" />
+<img width="1390" height="914" alt="image" src="https://github.com/user-attachments/assets/be3f2d07-1573-4e36-85b5-9b2191c9cfb6" />
 <br>
-<img width="1060" height="939" alt="image" src="https://github.com/user-attachments/assets/7897da4b-af8c-445c-aac4-0b1cbf76de72" />
+<img width="1382" height="913" alt="image" src="https://github.com/user-attachments/assets/2d39317f-44de-45c6-9d6a-8d328f6ae4b8" />
+
 
 </details>
 
@@ -257,16 +192,18 @@ https://mit.com/licenses/mit/
 
 ---
 
-# ☕ Support
+# ☕ Full Usage & WalkThrough
 
-<a href="https://ko-fi.com/forensicator">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210" />
+<a href="https://forensicator.io/walkthrough.html">
+  <img width="239" height="31" alt="image" src="https://github.com/user-attachments/assets/f4cb261c-65c8-4592-a42e-6b9ba54dc990" />
+
 </a>
 
 ---
 
-# 🔗 Connect
+# 🔗 Project Home
 
-<a href="https://www.linkedin.com/in/ebuka-john-onyejegbu">
-  LinkedIn
+<a href="https://forensicator.io">
+  <img width="147" height="36" alt="image" src="https://github.com/user-attachments/assets/824f5c19-9bf4-41a3-bad9-32549fa0d3bc" />
+
 </a>
