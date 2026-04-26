@@ -9,6 +9,8 @@ Windows (PowerShell) | Linux (Bash) | macOS (Shell)
 Built for fast, structured, and actionable forensic investigations.
 </p>
 
+
+
 ```bash
 ___________                                .__               __                
 \_   _____/__________   ____   ____   _____|__| ____ _____ _/  |_  ___________ 
@@ -17,14 +19,18 @@ ___________                                .__               __
  \___  / \____/|__|    \___  >___|  /____  >__|\___  >____  /__|  \____/|__|   
      \/                    \/     \/     \/        \/     \/                    
 
-                                                                        v4.1.2
+                                                                        v4.1.3
 ```
+
+<p align="center">
+<a href="https://forensicator.io"><img width="147" height="36" alt="image" src="https://github.com/user-attachments/assets/824f5c19-9bf4-41a3-bad9-32549fa0d3bc" width="400" ></a>
+</p>
 
 ---
 
 # 🤔 About
 
-**Forensicator** is a cross-platform incident response and live forensics toolkit, part of the Black Widow Toolbox.
+**Forensicator** is a cross-platform incident response and live forensics toolkit.
 
 It is designed to help forensic investigators and incident responders rapidly collect, analyze, and interpret system artifacts during live investigations.
 
@@ -48,7 +54,7 @@ Forensicator:
 * Browser history analysis with IOC matching
 * Optional artifact encryption (AES)
 * Detection Insight - A summary of the detection, why the detection matters, the detection logic code, what to look pout for in the detection and the Mitre Mapping.
-* Forensicator AI - This is aimed to give you tailored insight on the detection (Coming Soon!!!)
+* Signma Rule Integration for malicious activity detection
 
 👉 https://github.com/Johnng007/Live-Forensicator/tree/main/Windows
 
@@ -93,10 +99,11 @@ Forensicator:
 
 Forensicator generates:
 
-* Clean, structured HTML reports
+* Clean, structured HTML report
 * Indexed findings for easy navigation
 * Extracted artifacts stored locally
 * Detection insight into each finding.
+* Suspicious activity statistics with Sigma Rules.
 
 This enables fast transition from **data collection → investigation → decision-making**.
 
@@ -144,21 +151,23 @@ Forensicator identifies suspicious activity through:
 
 <img width="765" height="1127" src="https://github.com/user-attachments/assets/8e49146b-a1e4-4c28-8057-6071903baf75" />
 
+<img width="1398" height="390" alt="image" src="https://github.com/user-attachments/assets/c2d573d6-47fd-485f-8cf8-8c4ea082ff5e" />
+
+
 </details>
 
 <details>
 <summary>HTML Dashboard</summary>
 
-<img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML1.png?raw=true" />
+<img width="1392" height="913" alt="image" src="https://github.com/user-attachments/assets/60ab5fbb-0a84-4070-a5f1-901773e01096" />
 <br>
-<img width="1165" height="1037" src="https://github.com/user-attachments/assets/7a82d7a4-eac9-4c4c-8b12-193d77ed7640" />
+<img width="1383" height="908" alt="image" src="https://github.com/user-attachments/assets/c916c86f-10d2-4b24-8601-6cbd440baad3" />
 <br>
-<img src="https://github.com/Johnng007/Live-Forensicator/blob/main/styles/vendors/images/Forensicator_HTML3.png?raw=true" />
+<img width="1387" height="920" alt="image" src="https://github.com/user-attachments/assets/6cd350a4-830e-4513-922c-fc7140d13e71" />
 <br>
-<img width="1061" height="933" alt="image" src="https://github.com/user-attachments/assets/3e247456-f406-489f-b240-6acd992c8743" />
+<img width="1390" height="914" alt="image" src="https://github.com/user-attachments/assets/be3f2d07-1573-4e36-85b5-9b2191c9cfb6" />
 <br>
-<img width="1060" height="939" alt="image" src="https://github.com/user-attachments/assets/7897da4b-af8c-445c-aac4-0b1cbf76de72" />
-
+<img width="1382" height="913" alt="image" src="https://github.com/user-attachments/assets/2d39317f-44de-45c6-9d6a-8d328f6ae4b8" />
 
 
 </details>
@@ -168,40 +177,15 @@ Forensicator identifies suspicious activity through:
 # ✨ Changelog
 
 Full changelog:
-👉 https://github.com/Johnng007/Live-Forensicator/wiki/Changelog
+👉 https://forensicator.io/changelog.html
 
 ```bash
-Windows: v4.1.2 (13/04/2026)
-- NEW: Added Forensicator Insights with Mitre Mapping.
+Windows: v4.1.3 (May 2026)
+- NEW: Improved Dashboard UI/UX.
 - IMPROVED: Sigma Rule Support.
 - IMPROVED: Script Readability.
 
-Windows: v4.1.1 (23/03/2026)
-
-- NEW: Sigma rule support
-- NEW: Malware hash updates (abuse.ch)
-- NEW: Script execution logging
-- NEW: BitLocker key collection
-- IMPROVED: Encryption/Decryption
-- IMPROVED: Browser history & IOC detection
-- IMPROVED: Updated to modern commands
-
-Linux v4.1.1 (31/03/2026)
-
-- IMPROVED: Fixed some carriage return errors.
-- NEW: Added malicious executable check.
-- NEW: Added malicious shell commands check.
 ```
-
----
-
-# 🧰 More Tools (Black Widow Toolbox)
-
-* Anteater → Web reconnaissance (Python)
-  https://github.com/Johnng007/Anteater
-
-* Nessus Pro API → Export scan results (PowerShell)
-  https://github.com/Johnng007/PowershellNessus
 
 ---
 
@@ -222,16 +206,18 @@ https://mit.com/licenses/mit/
 
 ---
 
-# ☕ Support
+# ☕ Full Usage & WalkThrough
 
-<a href="https://ko-fi.com/forensicator">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" height="50" width="210" />
+<a href="https://forensicator.io/walkthrough.html">
+  <img width="239" height="31" alt="image" src="https://github.com/user-attachments/assets/f4cb261c-65c8-4592-a42e-6b9ba54dc990" />
+
 </a>
 
 ---
 
-# 🔗 Connect
+# 🔗 Project Home
 
-<a href="https://www.linkedin.com/in/ebuka-john-onyejegbu">
-  LinkedIn
+<a href="https://forensicator.io">
+  <img width="147" height="36" alt="image" src="https://github.com/user-attachments/assets/824f5c19-9bf4-41a3-bad9-32549fa0d3bc" />
+
 </a>
