@@ -1,5 +1,5 @@
-if(-not $script:sigmaBundlePath){
-    $script:sigmaBundlePath = Join-Path $PSScriptRoot "sigma-rules-precompiled.json"
+if(-not $script:sigmaRulesRoot){
+    $script:sigmaRulesRoot = Join-Path $PSScriptRoot "rules"
 }
 
 function Get-SigmaSeverityValue {
@@ -16,21 +16,127 @@ function Get-SigmaSeverityValue {
     return ($levelMap[$Level.ToLowerInvariant()] ?? 0)
 }
 
-function Get-SigmaRuleBundle {
-    param([string]$BundlePath = $script:sigmaBundlePath)
+function Get-SigmaStructuredRuleSet {
+    param([string]$RulesRoot = $script:sigmaRulesRoot)
 
-    if(-not (Test-Path $BundlePath)){
-        Write-ForensicLog "Precompiled Sigma bundle missing — skipping detection" -Level WARN -Section "SIGMA" -Detail "Bundle not found at $BundlePath."
+    if(-not (Test-Path $RulesRoot)){
+        return $null
+    }
+
+    $sourcesPath = Join-Path $RulesRoot "sources.json"
+    if(-not (Test-Path $sourcesPath)){
+        Write-ForensicLog "Structured Sigma rules folder found but sources.json is missing" -Level WARN -Section "SIGMA" -Detail "Expected sources metadata at $sourcesPath"
         return $null
     }
 
     try{
-        return (Get-Content $BundlePath -Raw -ErrorAction Stop | ConvertFrom-Json -Depth 100)
+        $sources = @(Get-Content $sourcesPath -Raw -ErrorAction Stop | ConvertFrom-Json -Depth 100)
     }
     catch{
-        Write-ForensicLog "Failed to load Sigma bundle: $($_.Exception.Message)" -Level ERROR -Section "SIGMA"
+        Write-ForensicLog "Failed to parse structured Sigma sources: $($_.Exception.Message)" -Level ERROR -Section "SIGMA" -Detail $sourcesPath
         return $null
     }
+
+    $ruleFiles = @(Get-ChildItem -Path $RulesRoot -Recurse -File -Filter *.json -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $sourcesPath })
+
+    if($ruleFiles.Count -eq 0){
+        Write-ForensicLog "Structured Sigma rules folder has no rule JSON files" -Level WARN -Section "SIGMA" -Detail "Expected rule files under $RulesRoot"
+        return $null
+    }
+
+    $rules = [System.Collections.Generic.List[object]]::new()
+
+    foreach($file in $ruleFiles){
+        try{
+            $parsed = Get-Content $file.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -Depth 100
+            if($null -eq $parsed){
+                continue
+            }
+
+            if($parsed -is [System.Array]){
+                foreach($rule in $parsed){
+                    if($null -ne $rule){
+                        $rules.Add($rule)
+                    }
+                }
+            }
+            else{
+                $rules.Add($parsed)
+            }
+        }
+        catch{
+            Write-ForensicLog "Failed to parse structured Sigma rule file: $($_.Exception.Message)" -Level WARN -Section "SIGMA" -Detail $file.FullName
+        }
+    }
+
+    if($rules.Count -eq 0){
+        Write-ForensicLog "No valid structured Sigma rules loaded" -Level WARN -Section "SIGMA" -Detail "Rules root: $RulesRoot"
+        return $null
+    }
+
+    return [PSCustomObject]@{
+        metadata = [PSCustomObject]@{
+            generated_at_utc     = (Get-Date).ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+            compiled_rule_count  = $rules.Count
+            skipped_rule_count   = 0
+            source               = "structured-json"
+            rules_root           = $RulesRoot
+        }
+        sources = $sources
+        rules   = @($rules)
+    }
+}
+
+function New-SigmaStringSet {
+    param([string[]]$Values)
+
+    $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach($value in @($Values)){
+        $text = [string]$value
+        if(-not [string]::IsNullOrWhiteSpace($text)){
+            [void]$set.Add($text.Trim())
+        }
+    }
+
+    return ,$set
+}
+
+function Test-SigmaSourceSelection {
+    param(
+        [psobject]$Source,
+        [System.Collections.Generic.HashSet[string]]$IncludeSourceIds,
+        [System.Collections.Generic.HashSet[string]]$ExcludeSourceIds,
+        [System.Collections.Generic.HashSet[string]]$IncludeLogNames,
+        [System.Collections.Generic.HashSet[string]]$ExcludeLogNames,
+        [System.Collections.Generic.HashSet[string]]$IncludeCategories,
+        [System.Collections.Generic.HashSet[string]]$ExcludeCategories
+    )
+
+    $sourceId = [string]$Source.id
+    $logName  = [string]$Source.log_name
+    $category = [string]$Source.category
+
+    if($IncludeSourceIds.Count -gt 0 -and -not $IncludeSourceIds.Contains($sourceId)){
+        return $false
+    }
+    if($ExcludeSourceIds.Contains($sourceId)){
+        return $false
+    }
+    if($IncludeLogNames.Count -gt 0 -and -not $IncludeLogNames.Contains($logName)){
+        return $false
+    }
+    if($ExcludeLogNames.Contains($logName)){
+        return $false
+    }
+    if($IncludeCategories.Count -gt 0 -and -not $IncludeCategories.Contains($category)){
+        return $false
+    }
+    if($ExcludeCategories.Contains($category)){
+        return $false
+    }
+
+    return $true
 }
 
 function ConvertTo-SigmaWildcardRegex {
@@ -61,10 +167,10 @@ function Get-SigmaComparableValues {
 
     if($Windash){
         if($Value.Contains('-')){
-            $values.Add($Value -replace '-', '/')
+            $values.Add(($Value -replace '-', '/'))
         }
         if($Value.Contains('/')){
-            $values.Add($Value -replace '/', '-')
+            $values.Add(($Value -replace '/', '-'))
         }
     }
 
@@ -205,11 +311,58 @@ function Test-SigmaRawMatcher {
     return ($perValueResults -contains $true)
 }
 
+function Get-SigmaRuleItemNames {
+    param(
+        $RuleItems,
+        [string]$Pattern
+    )
+
+    if($null -eq $RuleItems){
+        return @()
+    }
+
+    $names = @($RuleItems.PSObject.Properties | ForEach-Object { [string]$_.Name })
+    if($Pattern.ToLowerInvariant() -eq "them"){
+        return $names
+    }
+
+    return @($names | Where-Object { $_ -like $Pattern })
+}
+
+function Get-SigmaItemResult {
+    param(
+        [string]$Name,
+        $RuleItems,
+        $Context,
+        [hashtable]$ItemResults
+    )
+
+    if($ItemResults.ContainsKey($Name)){
+        return [bool]$ItemResults[$Name]
+    }
+
+    if($null -eq $RuleItems){
+        $ItemResults[$Name] = $false
+        return $false
+    }
+
+    $property = $RuleItems.PSObject.Properties[$Name]
+    if($null -eq $property){
+        $ItemResults[$Name] = $false
+        return $false
+    }
+
+    $result = Test-SigmaExpression -Expression $property.Value -Context $Context -ItemResults $ItemResults -RuleItems $RuleItems
+    $ItemResults[$Name] = [bool]$result
+    return [bool]$result
+}
+
 function Test-SigmaExpression {
     param(
         $Expression,
         $Context,
-        [hashtable]$ItemResults
+        [hashtable]$ItemResults,
+        $RuleItems
     )
 
     if($null -eq $Expression){ return $false }
@@ -217,7 +370,7 @@ function Test-SigmaExpression {
     switch([string]$Expression.type){
         "all" {
             foreach($child in @($Expression.children)){
-                if(-not (Test-SigmaExpression -Expression $child -Context $Context -ItemResults $ItemResults)){
+                if(-not (Test-SigmaExpression -Expression $child -Context $Context -ItemResults $ItemResults -RuleItems $RuleItems)){
                     return $false
                 }
             }
@@ -225,14 +378,14 @@ function Test-SigmaExpression {
         }
         "any" {
             foreach($child in @($Expression.children)){
-                if(Test-SigmaExpression -Expression $child -Context $Context -ItemResults $ItemResults){
+                if(Test-SigmaExpression -Expression $child -Context $Context -ItemResults $ItemResults -RuleItems $RuleItems){
                     return $true
                 }
             }
             return $false
         }
         "not" {
-            return (-not (Test-SigmaExpression -Expression $Expression.child -Context $Context -ItemResults $ItemResults))
+            return (-not (Test-SigmaExpression -Expression $Expression.child -Context $Context -ItemResults $ItemResults -RuleItems $RuleItems))
         }
         "field" {
             return (Test-SigmaFieldMatcher -Matcher $Expression -Context $Context)
@@ -241,16 +394,11 @@ function Test-SigmaExpression {
             return (Test-SigmaRawMatcher -Matcher $Expression -Context $Context)
         }
         "item_ref" {
-            return [bool]($ItemResults[[string]$Expression.name] ?? $false)
+            return (Get-SigmaItemResult -Name ([string]$Expression.name) -RuleItems $RuleItems -Context $Context -ItemResults $ItemResults)
         }
         "wildcard_ref" {
             $pattern = [string]$Expression.pattern
-            $keys = if($pattern.ToLowerInvariant() -eq "them"){
-                @($ItemResults.Keys)
-            }
-            else{
-                @($ItemResults.Keys | Where-Object { $_ -like $pattern })
-            }
+            $keys = @(Get-SigmaRuleItemNames -RuleItems $RuleItems -Pattern $pattern)
 
             if($keys.Count -eq 0){
                 return $false
@@ -258,7 +406,7 @@ function Test-SigmaExpression {
 
             if([string]$Expression.mode -eq "all"){
                 foreach($key in $keys){
-                    if(-not [bool]$ItemResults[$key]){
+                    if(-not (Get-SigmaItemResult -Name ([string]$key) -RuleItems $RuleItems -Context $Context -ItemResults $ItemResults)){
                         return $false
                     }
                 }
@@ -266,7 +414,7 @@ function Test-SigmaExpression {
             }
 
             foreach($key in $keys){
-                if([bool]$ItemResults[$key]){
+                if(Get-SigmaItemResult -Name ([string]$key) -RuleItems $RuleItems -Context $Context -ItemResults $ItemResults){
                     return $true
                 }
             }
@@ -280,11 +428,11 @@ function Test-SigmaExpression {
 
 function ConvertTo-SigmaEventContext {
     param(
-        $Event,
+        $Record,
         $Source
     )
 
-    $xml = [xml]$Event.ToXml()
+    $xml = [xml]$Record.ToXml()
     $eventData = @{}
 
     if($xml.Event.EventData -and $xml.Event.EventData.Data){
@@ -296,8 +444,8 @@ function ConvertTo-SigmaEventContext {
     }
 
     $systemValues = @{
-        EventID      = [string]$Event.Id
-        Channel      = [string]$Event.LogName
+        EventID      = [string]$Record.Id
+        Channel      = [string]$Record.LogName
         ProviderName = [string]$xml.Event.System.Provider.Name
     }
 
@@ -319,7 +467,7 @@ function ConvertTo-SigmaEventContext {
 
     $rawText = ""
     try{
-        $rawText = [string]$Event.Message
+        $rawText = [string]$Record.Message
     }
     catch{
         $rawText = ""
@@ -333,7 +481,7 @@ function ConvertTo-SigmaEventContext {
     }
 
     return @{
-        Event     = $Event
+        Event     = $Record
         Fields    = $fields
         EventData = $eventData
         RawText   = $rawText
@@ -347,11 +495,7 @@ function Test-SigmaRuleMatch {
     )
 
     $itemResults = @{}
-    foreach($property in $Rule.items.PSObject.Properties){
-        $itemResults[[string]$property.Name] = Test-SigmaExpression -Expression $property.Value -Context $Context -ItemResults $itemResults
-    }
-
-    return (Test-SigmaExpression -Expression $Rule.condition -Context $Context -ItemResults $itemResults)
+    return (Test-SigmaExpression -Expression $Rule.condition -Context $Context -ItemResults $itemResults -RuleItems $Rule.items)
 }
 
 function ConvertTo-SigmaFilterXml {
@@ -384,24 +528,68 @@ function ConvertTo-SigmaFilterXml {
 
 function Invoke-SigmaScan {
     param(
-        [string]$BundlePath = $script:sigmaBundlePath,
-        [int]   $DaysBack   = 30,
+        [string]  $RulesRoot         = $script:sigmaRulesRoot,
+        [int]     $DaysBack          = 30,
         [ValidateSet("critical","high","medium","low","informational")]
-        [string]$MinLevel   = "medium"
+        [string]  $MinLevel          = "medium",
+        [string[]]$IncludeSourceIds,
+        [string[]]$ExcludeSourceIds,
+        [string[]]$IncludeLogNames,
+        [string[]]$ExcludeLogNames,
+        [string[]]$IncludeCategories,
+        [string[]]$ExcludeCategories,
+        [int]$MaxEventsPerSource = 0
     )
 
-    $results     = [System.Collections.Generic.List[PSCustomObject]]::new()
-    $bundle      = Get-SigmaRuleBundle -BundlePath $BundlePath
-    $seenMatches = [System.Collections.Generic.HashSet[string]]::new()
+    $results             = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $bundle              = Get-SigmaStructuredRuleSet -RulesRoot $RulesRoot
+    $seenMatches         = [System.Collections.Generic.HashSet[string]]::new()
+    $failedRules         = [System.Collections.Generic.HashSet[string]]::new()
+    $includeSourceIdSet  = New-SigmaStringSet -Values $IncludeSourceIds
+    $excludeSourceIdSet  = New-SigmaStringSet -Values $ExcludeSourceIds
+    $includeLogNameSet   = New-SigmaStringSet -Values $IncludeLogNames
+    $excludeLogNameSet   = New-SigmaStringSet -Values $ExcludeLogNames
+    $includeCategorySet  = New-SigmaStringSet -Values $IncludeCategories
+    $excludeCategorySet  = New-SigmaStringSet -Values $ExcludeCategories
 
     if($null -eq $bundle){
+        Write-ForensicLog "No structured Sigma rules available — skipping detection" -Level WARN -Section "SIGMA" -Detail "Rules root: $RulesRoot"
         return ,$results
     }
 
-    Write-ForensicLog "Loaded precompiled Sigma bundle" -Level INFO -Section "SIGMA" -Detail "Generated: $($bundle.metadata.generated_at_utc) | Compiled rules: $($bundle.metadata.compiled_rule_count) | Skipped at build time: $($bundle.metadata.skipped_rule_count)"
+    $bundleSource = [string]($bundle.metadata.source ?? "structured-json")
+    Write-ForensicLog "Loaded Sigma rule set" -Level INFO -Section "SIGMA" -Detail "Source: $bundleSource | Generated: $($bundle.metadata.generated_at_utc) | Rules: $($bundle.metadata.compiled_rule_count)"
+
+    $activeSources = @(
+        @($bundle.sources) | Where-Object {
+            Test-SigmaSourceSelection `
+                -Source $_ `
+                -IncludeSourceIds $includeSourceIdSet `
+                -ExcludeSourceIds $excludeSourceIdSet `
+                -IncludeLogNames $includeLogNameSet `
+                -ExcludeLogNames $excludeLogNameSet `
+                -IncludeCategories $includeCategorySet `
+                -ExcludeCategories $excludeCategorySet
+        }
+    )
+
+    if($activeSources.Count -eq 0){
+        Write-ForensicLog "No Sigma event sources selected after config filters" -Level WARN -Section "SIGMA" -Detail "Rules root: $RulesRoot"
+        return ,$results
+    }
+
+    $allowedSourceIds = New-SigmaStringSet -Values @($activeSources | ForEach-Object { [string]$_.id })
+    $activeLogNames   = @($activeSources | ForEach-Object { [string]$_.log_name } | Sort-Object -Unique)
+    $maxEventsLabel = if($MaxEventsPerSource -gt 0){ [string]$MaxEventsPerSource } else { "unbounded" }
+    Write-ForensicLog "Sigma source selection resolved" -Level INFO -Section "SIGMA" -Detail "Sources: $($activeSources.Count)/$(@($bundle.sources).Count) | Logs: $($activeLogNames -join ', ') | MaxEventsPerSource: $maxEventsLabel"
 
     $minLevelNum = Get-SigmaSeverityValue -Level $MinLevel
-    $rules = @($bundle.rules | Where-Object { (Get-SigmaSeverityValue -Level ([string]$_.level)) -ge $minLevelNum })
+    $rules = @(
+        $bundle.rules | Where-Object {
+            ((Get-SigmaSeverityValue -Level ([string]$_.level)) -ge $minLevelNum) -and
+            (@($_.sources | Where-Object { $allowedSourceIds.Contains([string]$_) }).Count -gt 0)
+        }
+    )
 
     if($rules.Count -eq 0){
         Write-ForensicLog "No Sigma rules met the selected severity threshold" -Level WARN -Section "SIGMA" -Detail "Minimum level: $MinLevel"
@@ -409,13 +597,16 @@ function Invoke-SigmaScan {
     }
 
     $sourceMap = @{}
-    foreach($source in @($bundle.sources)){
+    foreach($source in $activeSources){
         $sourceMap[[string]$source.id] = $source
     }
 
     $rulesBySource = @{}
     foreach($rule in $rules){
         foreach($sourceId in @($rule.sources)){
+            if(-not $allowedSourceIds.Contains([string]$sourceId)){
+                continue
+            }
             if(-not $rulesBySource.ContainsKey([string]$sourceId)){
                 $rulesBySource[[string]$sourceId] = [System.Collections.Generic.List[object]]::new()
             }
@@ -446,15 +637,39 @@ function Invoke-SigmaScan {
         $filterXml = ConvertTo-SigmaFilterXml -Source $source -DaysBack $DaysBack
 
         try{
-            foreach($event in Get-WinEvent -FilterXml $filterXml -ErrorAction Stop){
-                $context = ConvertTo-SigmaEventContext -Event $event -Source $source
+            $eventQueryParams = @{
+                FilterXml   = $filterXml
+                ErrorAction = "Stop"
+            }
+            if($MaxEventsPerSource -gt 0){
+                $eventQueryParams.MaxEvents = $MaxEventsPerSource
+            }
+
+            $candidateCount = 0
+            foreach($logRecord in Get-WinEvent @eventQueryParams){
+                $candidateCount++
+                $context = ConvertTo-SigmaEventContext -Record $logRecord -Source $source
 
                 foreach($rule in $rulesBySource[$sourceId]){
-                    if(-not (Test-SigmaRuleMatch -Rule $rule -Context $context)){
+                    try{
+                        $isMatch = Test-SigmaRuleMatch -Rule $rule -Context $context
+                    }
+                    catch{
+                        $ruleKey = "{0}|{1}" -f ([string]$sourceId), ([string]$rule.rule_file)
+                        if($failedRules.Add($ruleKey)){
+                            Write-ForensicLog "Sigma rule evaluation failed — skipping rule" `
+                                              -Level WARN `
+                                              -Section "SIGMA" `
+                                              -Detail "Source: $([string]$source.log_name) | Rule: $([string]$rule.title) | File: $([string]$rule.rule_file) | Error: $($_.Exception.Message)"
+                        }
                         continue
                     }
 
-                    $recordId = [string]($event.RecordId ?? $event.Id)
+                    if(-not $isMatch){
+                        continue
+                    }
+
+                    $recordId = [string]($logRecord.RecordId ?? $logRecord.Id)
                     $matchKey = "$sourceId|$([string]$rule.rule_file)|$recordId"
                     if(-not $seenMatches.Add($matchKey)){
                         continue
@@ -464,9 +679,9 @@ function Invoke-SigmaScan {
                         RuleTitle   = [string]$rule.title
                         RuleLevel   = [string]$rule.level
                         RuleTags    = (@($rule.tags) -join ", ")
-                        EventId     = $event.Id
-                        LogName     = [string]$event.LogName
-                        TimeCreated = $event.TimeCreated.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        EventId     = $logRecord.Id
+                        LogName     = [string]$logRecord.LogName
+                        TimeCreated = $logRecord.TimeCreated.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
                         User        = [string]($context.Fields["User"] ?? $context.EventData["SubjectUserName"] ?? $context.EventData["TargetUserName"] ?? "N/A")
                         CommandLine = [string]($context.Fields["CommandLine"] ?? $context.Fields["ScriptBlockText"] ?? $context.Fields["Payload"] ?? "N/A")
                         Process     = [string]($context.Fields["Image"] ?? $context.Fields["ImageLoaded"] ?? "N/A")
@@ -476,12 +691,24 @@ function Invoke-SigmaScan {
                     Write-ForensicLog "SIGMA HIT: $([string]$rule.title)" `
                                       -Level FINDING `
                                       -Section "SIGMA" `
-                                      -Detail "Level: $([string]$rule.level) | EventId: $($event.Id) | Time: $($event.TimeCreated)"
+                                      -Detail "Level: $([string]$rule.level) | EventId: $($logRecord.Id) | Time: $($logRecord.TimeCreated)"
                 }
+            }
+
+            if($MaxEventsPerSource -gt 0 -and $candidateCount -ge $MaxEventsPerSource){
+                Write-ForensicLog "Sigma source reached event cap" -Level WARN -Section "SIGMA" -Detail "Source: $([string]$source.log_name) | SourceId: $sourceId | Scanned newest $candidateCount candidate events | Increase sigma.max_events_per_source for deeper coverage"
+            }
+            else{
+                Write-ForensicLog "Sigma source scanned" -Level INFO -Section "SIGMA" -Detail "Source: $([string]$source.log_name) | SourceId: $sourceId | Candidate events: $candidateCount"
             }
         }
         catch{
-            Write-ForensicLog "Failed Sigma query for $([string]$source.log_name): $($_.Exception.Message)" -Level WARN -Section "SIGMA"
+            if($_.Exception.Message -like "*No events were found that match the specified selection criteria*"){
+                Write-ForensicLog "No Sigma candidate events in $([string]$source.log_name) for the selected time range" -Level INFO -Section "SIGMA"
+            }
+            else{
+                Write-ForensicLog "Failed Sigma query for $([string]$source.log_name): $($_.Exception.Message)" -Level WARN -Section "SIGMA"
+            }
         }
     }
 

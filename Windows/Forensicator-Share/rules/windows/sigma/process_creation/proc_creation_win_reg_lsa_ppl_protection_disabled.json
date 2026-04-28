@@ -1,0 +1,89 @@
+{
+  "title": "LSA PPL Protection Disabled Via Reg.EXE",
+  "rule_id": "8c0eca51-0f88-4db2-9183-fdfb10c703f9",
+  "description": "Detects the usage of the \"reg.exe\" utility to disable PPL protection on the LSA process",
+  "level": "high",
+  "status": "test",
+  "tags": [
+    "attack.defense-evasion",
+    "attack.t1562.010"
+  ],
+  "category": "process_creation",
+  "rule_file": "rules/windows/process_creation/proc_creation_win_reg_lsa_ppl_protection_disabled.yml",
+  "sources": [
+    "sysmon_process_creation"
+  ],
+  "items": {
+    "selection_img": {
+      "type": "any",
+      "children": [
+        {
+          "type": "all",
+          "children": [
+            {
+              "type": "field",
+              "field": "Image",
+              "operator": "endswith",
+              "values": [
+                "\\reg.exe"
+              ],
+              "match": "any",
+              "windash": false,
+              "ignore_case": true
+            }
+          ]
+        },
+        {
+          "type": "all",
+          "children": [
+            {
+              "type": "field",
+              "field": "OriginalFileName",
+              "operator": "exact",
+              "values": [
+                "reg.exe"
+              ],
+              "match": "any",
+              "windash": false,
+              "ignore_case": true
+            }
+          ]
+        }
+      ]
+    },
+    "selection_cli": {
+      "type": "all",
+      "children": [
+        {
+          "type": "field",
+          "field": "CommandLine",
+          "operator": "contains",
+          "values": [
+            "SYSTEM\\CurrentControlSet\\Control\\Lsa"
+          ],
+          "match": "any",
+          "windash": false,
+          "ignore_case": true
+        },
+        {
+          "type": "field",
+          "field": "CommandLine",
+          "operator": "contains",
+          "values": [
+            " add ",
+            " /d 0",
+            " /v RunAsPPL "
+          ],
+          "match": "all",
+          "windash": false,
+          "ignore_case": true
+        }
+      ]
+    }
+  },
+  "condition": {
+    "type": "wildcard_ref",
+    "mode": "all",
+    "pattern": "selection_*"
+  }
+}

@@ -1,5 +1,7 @@
 https://svc1sync.opticalsensorhub.in.net/verification.google
 http://124.131.4.213:46689/i
+https://chatgpt.com
+https://meet.google.com/
 http://110.38.199.22:50725/i
 http://218.91.153.60:39720/i
 http://117.209.21.68:36734/bin.sh

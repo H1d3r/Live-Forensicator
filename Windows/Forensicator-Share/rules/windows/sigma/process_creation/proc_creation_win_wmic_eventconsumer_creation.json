@@ -1,0 +1,41 @@
+{
+  "title": "New ActiveScriptEventConsumer Created Via Wmic.EXE",
+  "rule_id": "ebef4391-1a81-4761-a40a-1db446c0e625",
+  "description": "Detects WMIC executions in which an event consumer gets created. This could be used to establish persistence",
+  "level": "high",
+  "status": "test",
+  "tags": [
+    "attack.privilege-escalation",
+    "attack.persistence",
+    "attack.t1546.003"
+  ],
+  "category": "process_creation",
+  "rule_file": "rules/windows/process_creation/proc_creation_win_wmic_eventconsumer_creation.yml",
+  "sources": [
+    "security_process_creation",
+    "sysmon_process_creation"
+  ],
+  "items": {
+    "selection": {
+      "type": "all",
+      "children": [
+        {
+          "type": "field",
+          "field": "CommandLine",
+          "operator": "contains",
+          "values": [
+            "ActiveScriptEventConsumer",
+            " CREATE "
+          ],
+          "match": "all",
+          "windash": false,
+          "ignore_case": true
+        }
+      ]
+    }
+  },
+  "condition": {
+    "type": "item_ref",
+    "name": "selection"
+  }
+}
