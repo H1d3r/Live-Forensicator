@@ -126,7 +126,7 @@ Write-Host ''
 ##region Functions for Version Check and Update##
 #################################################
 if ($UPDATE) {
-  Write-Host -Fore DarkCyan "[*] Downloading & Comparing Version Files" -Level INFO -Section "CORE"
+  Write-Host -ForegroundColor DarkCyan "[*] Downloading & Comparing Version Files"
   New-Item -Name "Updated" -ItemType "directory" -Force | Out-Null
   Set-Location Updated
 
@@ -134,11 +134,11 @@ if ($UPDATE) {
 
   if (((Test-NetConnection www.githubusercontent.com -Port 80 -InformationLevel "Detailed").TcpTestSucceeded) -eq $true) {
 	
-    Invoke-WebRequest -Uri $source -OutFile $rawUrl	
+    Invoke-WebRequest -Uri $rawUrl -OutFile $destination	
   }
 
   else {
-    Write-Host -Fore DarkCyan "[*] githubusercontent.com is not reacheable, please check your connection" -Level WARN -Section "CORE"
+    Write-Host -ForegroundColor DarkCyan "[*] githubusercontent.com is not reacheable, please check your connection"
     Set-Location $PSScriptRoot
     Remove-Item 'Updated' -Force -Recurse
     exit 0
@@ -146,7 +146,7 @@ if ($UPDATE) {
 
   if ((Get-FileHash $version_file).hash -eq (Get-FileHash $current_version).hash) {
 	 
-    Write-Host -Fore Cyan "[*] Congratualtion you have the current version" -Level SUCCESS -Section "CORE"
+    Write-Host -ForegroundColor Cyan "[*] Congratualtion you have the current version"
     Set-Location $PSScriptRoot
     Remove-Item 'Updated' -Force -Recurse
     exit
@@ -157,9 +157,9 @@ if ($UPDATE) {
     $source = 'https://github.com/Johnng007/Live-Forensicator/archive/refs/heads/main.zip'
     $destination = 'Live-Forensicator-main.zip'
     Invoke-WebRequest -Uri $source -OutFile $destination
-    Write-Host -Fore DarkCyan "[*] Extracting the downloads....." -Level INFO -Section "CORE"
+    Write-Host -ForegroundColor DarkCyan "[*] Extracting the downloads....."
     Expand-Archive -Force $PSScriptRoot\Updated\Live-Forensicator-main.zip -DestinationPath $PSScriptRoot\Updated 
-    Write-Host -Fore DarkCyan "[*] Cleaning Up...." -Level INFO -Section "CORE"
+    Write-Host -ForegroundColor DarkCyan "[*] Cleaning Up...."
     Remove-Item -Path $PSScriptRoot\Updated\Live-Forensicator-main.zip -Force
     Remove-Item -Path $PSScriptRoot\Updated\version.txt -Force
     Write-Host -Fore Cyan "[*] All Done Enjoy the new version in the Updated Folder"
@@ -250,12 +250,12 @@ if($DECRYPT){
     }
 
     if(-not $forensicatorFiles){
-        Write-ForensicLog -ForegroundColor DarkCyan "[!] Cannot find encrypted file in default location." -Level WARN -Section "CRYPT"
+        Write-ForensicLog "[!] Cannot find encrypted file in default location." -Level WARN -Section "CRYPT"
         $TargetPath = Read-Host -Prompt "Enter full path to folder containing the encrypted file"
 
         # Validate the provided path exists and contains .forensicator files
         if(-not (Test-Path $TargetPath)){
-            Write-ForensicLog -ForegroundColor Red "[!] Path does not exist: $TargetPath" -Level ERROR -Section "CRYPT"
+            Write-ForensicLog "[!] Path does not exist: $TargetPath" -Level ERROR -Section "CRYPT"
             exit 1
         }
 
@@ -263,7 +263,7 @@ if($DECRYPT){
                              Where-Object { -not $_.PSIsContainer }
 
         if(-not $forensicatorFiles){
-            Write-ForensicLog -ForegroundColor Red "[!] No .forensicator files found in: $TargetPath" -Level ERROR -Section "CRYPT"
+            Write-ForensicLog "[!] No .forensicator files found in: $TargetPath" -Level ERROR -Section "CRYPT"
             exit 1
         }
     }
@@ -275,7 +275,7 @@ if($DECRYPT){
     $KeyInput = Read-Host -Prompt "Enter Decryption Key"
 
     if([string]::IsNullOrWhiteSpace($KeyInput)){
-        Write-ForensicLog -ForegroundColor Red "[!] No key provided — aborting" -Level ERROR -Section "CRYPT"
+        Write-ForensicLog "[!] No key provided — aborting" -Level ERROR -Section "CRYPT"
         exit 1
     }
 
@@ -284,7 +284,7 @@ if($DECRYPT){
         [void][Convert]::FromBase64String($KeyInput)
     }
     catch{
-        Write-ForensicLog -ForegroundColor Red "[!] Key does not appear to be valid Base64 — check your key.txt" -Level ERROR -Section "CRYPT"
+        Write-ForensicLog "[!] Key does not appear to be valid Base64 — check your key.txt" -Level ERROR -Section "CRYPT"
         exit 1
     }
 
@@ -298,7 +298,7 @@ if($DECRYPT){
     $success  = 0
     $failed   = 0
 
-    Write-ForensicLog -ForegroundColor DarkCyan "[*] Found $total file(s) to decrypt"
+    Write-ForensicLog "[*] Found $total file(s) to decrypt"
 
     foreach($file in $FilesToDecrypt){
         Write-ForensicLog "Decrypting $($file.Name)..."
@@ -307,13 +307,13 @@ if($DECRYPT){
             $success++
         }
         catch{
-            Write-ForensicLog -ForegroundColor Red "[!] Failed to decrypt $($file.Name) — wrong key or corrupted file" -Level ERROR -Section "CRYPT"
-            Write-ForensicLog -ForegroundColor Red "    $($_.Exception.Message)" -Level ERROR -Section "CRYPT"
+            Write-ForensicLog "[!] Failed to decrypt $($file.Name) — wrong key or corrupted file" -Level ERROR -Section "CRYPT"
+            Write-ForensicLog "    $($_.Exception.Message)" -Level ERROR -Section "CRYPT"
             $failed++
         }
     }
 
-    Write-ForensicLog -ForegroundColor Cyan "[!] Decryption complete — $success succeeded, $failed failed" -Level INFO -Section "CRYPT"
+    Write-ForensicLog "[!] Decryption complete — $success succeeded, $failed failed" -Level INFO -Section "CRYPT"
 
     exit 0
 }
@@ -507,7 +507,14 @@ $configData = Get-Content $configFile | ConvertFrom-Json
 
 $Hostname = $env:computername
 
-$userUID = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+
+# ── Safe defaults for JS data globals — overwritten later after data collection ──
+# Using $script: scope so they are visible inside the HTMLFiles function's here-string.
+$script:sigmaJsonSafe = '[]'
+$script:hashJsonSafe  = '[]'
+$script:iocJsonSafe   = '[]'
+
+#$userUID = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 
 #endregion
 
@@ -594,12 +601,12 @@ else {
 #EXHIBIT REFERENCE
 if ($TITLE) {
    
-  $Ref = $TITLE
+  $CaseTitle = $TITLE
    
 } 
 else {
 	
-  $Ref = Read-Host -Prompt 'Enter Investigation Title'
+  $CaseTitle = Read-Host -Prompt 'Enter Investigation Title'
 
 }
 
@@ -618,12 +625,12 @@ else {
 #DESCRIPTION
 if ($DEVICE) {
    
-  $Des = $DEVICE
+  $Device = $DEVICE
    
 } 
 else {
 	
-  $Des = Read-Host -Prompt 'Enter description of device e.g. "Asus Laptop"'
+  $Device = Read-Host -Prompt 'Enter description of device e.g. "Asus Laptop"'
 
 }
 
@@ -647,40 +654,7 @@ mkdir $env:computername -Force | Out-Null
 
 
 # Setting index output file
-$ForensicatorIndexFile = "$PSScriptRoot\$env:COMPUTERNAME\index.html"
-
-# Setting Extras Output file
-$ForensicatorExtrasFile = "$PSScriptRoot\$env:COMPUTERNAME\extras.html"
-
-# Setting Network Information Output
-$NetworkFile = "$PSScriptRoot\$env:COMPUTERNAME\network.html"
-
-# Setting Users Information Output
-$UserFile = "$PSScriptRoot\$env:COMPUTERNAME\users.html"
-
-# Setting System Information Output
-$SystemFile = "$PSScriptRoot\$env:COMPUTERNAME\system.html"
-
-# Setting Processes Output
-$ProcessFile = "$PSScriptRoot\$env:COMPUTERNAME\processes.html"
-
-# Setting Other Checks Output
-$OthersFile = "$PSScriptRoot\$env:COMPUTERNAME\others.html"
-
-# Setting Evtx Checks Output
-$EvtxUserFile = "$PSScriptRoot\$env:COMPUTERNAME\evtx_user.html"
-
-# Setting Evtx Logon Events Checks Output
-$LogonEventsFile = "$PSScriptRoot\$env:COMPUTERNAME\evtx_logons.html"
-
-# Setting Evtx Object Access Checks Output
-$ObjectEventsFile = "$PSScriptRoot\$env:COMPUTERNAME\evtx_object.html"
-
-# Setting Evtx Process Execution Checks Output
-$ProcessEventsFile = "$PSScriptRoot\$env:COMPUTERNAME\evtx_process.html"
-
-# Setting Detection Output
-$DetectionFile = "$PSScriptRoot\$env:COMPUTERNAME\detection.html"
+$HTMLFiles = "$PSScriptRoot\$env:COMPUTERNAME\index.html"
 
 
 ##################################################
@@ -794,7 +768,26 @@ foreach ($process in $NetTCPConnect) {
   $NetTCPConnectFragment += "<td>$($process.RemotePort)</td>"
   $NetTCPConnectFragment += "<td>$($process.State)</td>"
   $NetTCPConnectFragment += "<td>$($process.OwningProcess)</td>"
+  $NetTCPConnectFragment += "<td>$($process.Process)</td>"
   $NetTCPConnectFragment += "</tr>"
+}
+
+$procIndex = Get-Process | Group-Object Id -AsHashTable -AsString
+
+$NetListenFragment = @()
+
+# TCP LISTENING
+$NetListenFragment += foreach ($c in Get-NetTCPConnection -State Listen) {
+    $gp = $procIndex["$($c.OwningProcess)"]; if ($gp -is [Array]) { $gp = $gp[0] }
+    $proc = $gp.ProcessName
+    "<tr><td>$($c.LocalPort)</td><td>TCP</td><td>$($c.OwningProcess)</td><td>$proc</td></tr>"
+}
+
+# UDP (no state, but effectively listening)
+$NetListenFragment += foreach ($c in Get-NetUDPEndpoint) {
+    $gp = $procIndex["$($c.OwningProcess)"]; if ($gp -is [Array]) { $gp = $gp[0] }
+    $proc = $gp.ProcessName
+    "<tr><td>$($c.LocalPort)</td><td>UDP</td><td>$($c.OwningProcess)</td><td>$proc</td></tr>"
 }
 
 #Get Wi-fi Names and Passwords
@@ -910,76 +903,24 @@ Write-ForensicLog ""
 #region User & Account Information               #
 ##################################################
 
-Write-ForensicLog "[*] Gathering User & Account Information" -Level INFO -Section "USER"
+Write-ForensicLog "[*] Gathering User Account Details" -Level INFO -Section "USER"
 
-$systemname = Get-CimInstance -Class Win32_ComputerSystem | Select-Object Name, DNSHostName, Domain, Manufacturer, Model, PrimaryOwnerName, TotalPhysicalMemory, Workgroup  #| ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$systemnameFragment = ""
-# Populate the HTML table with process information
-foreach ($process in $systemname) {
-  $systemnameFragment += "<tr>"
-  $systemnameFragment += "<td>$($process.Name)</td>"
-  $systemnameFragment += "<td>$($process.DNSHostName)</td>"
-  $systemnameFragment += "<td>$($process.Domain)</td>"
-  $systemnameFragment += "<td>$($process.Manufacturer)</td>"
-  $systemnameFragment += "<td>$($process.Model)</td>"
-  $systemnameFragment += "<td>$($process.PrimaryOwnerName)</td>"
-  $systemnameFragment += "<td>$($process.TotalPhysicalMemory)</td>"
-  $systemnameFragment += "<td>$($process.Workgroup)</td>"
-  $systemnameFragment += "</tr>"
+$LocalUserAccounts = Get-LocalUser | Select-Object Name, Enabled, LastLogon, PasswordLastSet, PasswordExpires, Description, PasswordChangeableDate, UserMayChangePassword
+foreach ($process in $LocalUserAccounts) {
+  $LocalUserAccountsFragment += "<tr>"
+  $LocalUserAccountsFragment += "<td>$($process.Name)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.Enabled)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.LastLogon)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.PasswordLastSet)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.PasswordExpires)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.Description)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.PasswordChangeableDate)</td>"
+  $LocalUserAccountsFragment += "<td>$($process.UserMayChangePassword)</td>"
+  $LocalUserAccountsFragment += "</tr>"
 }
-
-#$useraccounts = Get-CimInstance -Class Win32_UserAccount  | Select-Object -Property AccountType,Domain,LocalAccount,Name,PasswordRequired,SID,SIDType | ConvertTo-Html -fragment
-#$logonsessionhistory = Get-CimInstance -Class Win32_LogonSession | Select-Object -Property LogonID, LogonType, StartTime, @{Name = 'Start Time'; Expression = { $_.ConvertToDateTime($_.starttime) } }   | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-#######ADDITIONS
-$logonsession = (((quser) -replace '^>', '') -replace '\s{2,}', ',').Trim() | ConvertFrom-Csv #| ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-#$userprocesses = Get-Process -includeusername | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$logonsessionFragment = ""
-# Populate the HTML table with process information
-foreach ($process in $logonsession) {
-  $logonsessionFragment += "<tr>"
-  $logonsessionFragment += "<td>$($process.USERNAME)</td>"
-  $logonsessionFragment += "<td>$($process.SESSIONNAME)</td>"
-  $logonsessionFragment += "<td>$($process.STATE)</td>"
-  $logonsessionFragment += "<td>$($process.ID)</td>"
-  $logonsessionFragment += "<td>$($process.'IDLE TIME')</td>"
-  $logonsessionFragment += "<td>$($process.'LOGON TIME')</td>"
-  $logonsessionFragment += "</tr>"
-}
-
-$userprocesses = Get-Process -includeusername | Select-Object Name, Id, Username, CPU, Memory, Path 
-# Populate the HTML table with process information
-$userprocessesFragment = ""
-foreach ($process in $userprocesses) {
-  $userprocessesFragment += "<tr>"
-  $userprocessesFragment += "<td>$($process.Name)</td>"
-  $userprocessesFragment += "<td>$($process.Id)</td>"
-  $userprocessesFragment += "<td>$($process.UserName)</td>"
-  $userprocessesFragment += "<td>$($process.CPU)</td>"
-  $userprocessesFragment += "<td>$($process.Memory)</td>"
-  $userprocessesFragment += "<td>$($process.Path)</td>"
-  $userprocessesFragment += "</tr>"
-}
-
-#$userprofiles = Get-CimInstance -Class Win32_UserProfile | Select-object -property Caption, LocalPath, SID, @{Name = 'Last Used'; Expression = { $_.ConvertToDateTime($_.lastusetime) } } | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-
-$userprofiles = Get-CimInstance -Class Win32_UserProfile | Select-object -property LocalPath, SID, lastusetime
-# Populate the HTML table with process information
-$profileFragment = ""
-
-foreach ($process in $userprofiles) {
-  $profileFragment += "<tr>"
-  $profileFragment += "<td>$($process.LocalPath)</td>"
-  $profileFragment += "<td>$($process.SID)</td>"
- # $profileFragment += "<td>$([Management.ManagementDateTimeConverter]::ToDateTime($process.lastusetime))</td>"
-  $profileFragment += "<td>$($process.lastusetime)</td>"
-  $profileFragment += "</tr>"
-}
-
-
-#$administrators = Get-LocalGroupMember -Group "Administrators" | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
 
 $administrators = Get-LocalGroupMember -Group "Administrators"
-# Populate the HTML table with process information
+
 $adminFragment = ""
 
 foreach ($process in $administrators) {
@@ -990,16 +931,42 @@ foreach ($process in $administrators) {
   $adminFragment += "</tr>"
 }
 
+$logonsession = (quser 2>$null | Select-Object -Skip 1 | ForEach-Object { ($_ -replace '^\s*>?', '') -replace '\s{2,}', ',' }) | ConvertFrom-Csv -Header Username,SessionName,ID,State,IdleTime,LogonTime | Select-Object @{N='Username';E={$_.Username}}, @{N='Domain';E={$env:COMPUTERNAME}}, @{N='LogonType';E={'Interactive'}}, @{N='LogonTime';E={$_.LogonTime}}, @{N='IDLETIME';E={$_.IdleTime}}
 
-#$LocalGroup = Get-LocalGroup | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-
-$LocalGroup = Get-LocalGroup
+$logonsessionFragment = ""
 # Populate the HTML table with process information
+foreach ($process in $logonsession) {
+  $logonsessionFragment += "<tr>"
+  $logonsessionFragment += "<td>$($process.Username)</td>"
+  $logonsessionFragment += "<td>$($process.Domain)</td>"
+  $logonsessionFragment += "<td>$($process.LogonType)</td>"
+  $logonsessionFragment += "<td>$($process.LogonTime)</td>"
+  $logonsessionFragment += "<td>$($process.IdleTime)</td>"
+  $logonsessionFragment += "</tr>"
+}
+
+$userprofiles = Get-CimInstance Win32_UserProfile | Where-Object {$_.LocalPath -like "C:\Users\*"} | Select-Object @{N='Username';E={Split-Path $_.LocalPath -Leaf}}, SID, @{N='LastUseTime';E={[datetime]$_.LastUseTime}}
+# Populate the HTML table with process information
+$profileFragment = ""
+
+foreach ($process in $userprofiles) {
+  $profileFragment += "<tr>"
+  $profileFragment += "<td>$($process.Username)</td>"
+  $profileFragment += "<td>$($process.SID)</td>"
+  $profileFragment += "<td>$($process.LastUseTime)</td>"
+  $profileFragment += "</tr>"
+}
+
+
+$LocalGroup = 'Administrators','Remote Desktop Users','Backup Operators','Power Users' | ForEach-Object { $g=$_; Get-LocalGroupMember -Group $g -ErrorAction SilentlyContinue | ForEach-Object { [PSCustomObject]@{ Group=$g; Username=($_.Name -split '\\')[-1]; Domain=($_.Name -split '\\')[0]; Type=$_.ObjectClass } } }
+
 $localFragment = ""
 foreach ($process in $LocalGroup) {
   $localFragment += "<tr>"
-  $localFragment += "<td>$($process.Name)</td>"
-  $localFragment += "<td>$($process.Description)</td>"
+  $localFragment += "<td>$($process.Group)</td>"
+  $localFragment += "<td>$($process.Username)</td>"
+  $localFragment += "<td>$($process.Domain)</td>"
+  $localFragment += "<td>$($process.Type)</td>"
   $localFragment += "</tr>"
 }
 
@@ -1009,46 +976,7 @@ Write-ForensicLog "[!] Done" -Level SUCCESS -Section "USER"
 
 Write-ForensicLog ""
 
-##################################################
-#region Installed Programs                       #
-##################################################
 
-Write-ForensicLog "[*] Gathering Installed Programs" -Level INFO -Section "INSTALLED_PROGRAMS"
-
-#$InstProgs = Get-CimInstance -ClassName win32_product | Select-Object Name, Version, Vendor, InstallDate, InstallSource, PackageName, LocalPackage | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$InstProgs = Get-CimInstance -ClassName win32_product | Select-Object Name, Version, Vendor, InstallDate, InstallSource, PackageName, LocalPackage
-# Populate the HTML table with process information
-foreach ($process in $InstProgs) {
-  $InstProgsFragment += "<tr>"
-  $InstProgsFragment += "<td>$($process.Name)</td>"
-  $InstProgsFragment += "<td>$($process.Version)</td>"
-  $InstProgsFragment += "<td>$($process.Vendor)</td>"
-  $InstProgsFragment += "<td>$($process.InstallDate)</td>"
-  $InstProgsFragment += "<td>$($process.InstallSource)</td>"
-  $InstProgsFragment += "<td>$($process.PackageName)</td>"
-  $InstProgsFragment += "<td>$($process.LocalPackage)</td>"
-  $InstProgsFragment += "</tr>"
-}
-
-#$InstalledApps = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-
-$InstalledApps = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, Publisher, InstallDate
-# Populate the HTML table with process information
-foreach ($process in $InstalledApps) {
-  $InstalledAppsFragment += "<tr>"
-  $InstalledAppsFragment += "<td>$($process.DisplayName)</td>"
-  $InstalledAppsFragment += "<td>$($process.DisplayVersion)</td>"
-  $InstalledAppsFragment += "<td>$($process.Publisher)</td>"
-  $InstalledAppsFragment += "<td>$($process.InstallDate)</td>"
-  $InstalledAppsFragment += "</tr>"
-}
-
-
-Write-ForensicLog "[!] Done" -Level SUCCESS -Section "INSTALLED_PROGRAMS"
-
-#endregion
-
-Write-ForensicLog ""
 
 ##################################################
 #region System Info                              #
@@ -1056,64 +984,73 @@ Write-ForensicLog ""
 
 Write-ForensicLog "[*] Gathering System Information" -Level INFO -Section "SYSTEM_INFO"
 
-#Environment Settings
-#$env = Get-ChildItem ENV: | Select-Object name, value | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$env = Get-ChildItem ENV: | Select-Object name, value
-# Populate the HTML table with process information
-foreach ($process in $env) {
-  $envFragment += "<tr>"
-  $envFragment += "<td>$($process.name)</td>"
-  $envFragment += "<td>$($process.value)</td>"
-  $envFragment += "</tr>"
-}
-
-#System Info
-#$systeminfo = Get-CimInstance -Class Win32_ComputerSystem  | Select-Object -Property Name, Caption, SystemType, Manufacturer, Model, DNSHostName, Domain, PartOfDomain, WorkGroup, CurrentTimeZone, PCSystemType, HyperVisorPresent | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$systeminfo = Get-CimInstance -Class Win32_ComputerSystem  | Select-Object -Property Name, Caption, SystemType, Manufacturer, Model, DNSHostName, Domain, PartOfDomain, WorkGroup, CurrentTimeZone, PCSystemType, HyperVisorPresent
-# Populate the HTML table with process information
-foreach ($process in $systeminfo) {
-  $systeminfoFragment += "<tr>"
-  $systeminfoFragment += "<td>$($process.Name)</td>"
-  $systeminfoFragment += "<td>$($process.Caption)</td>"
-  $systeminfoFragment += "<td>$($process.SystemType)</td>"
-  $systeminfoFragment += "<td>$($process.Manufacturer)</td>"
-  $systeminfoFragment += "<td>$($process.Model)</td>"
-  $systeminfoFragment += "<td>$($process.DNSHostName)</td>"
-  $systeminfoFragment += "<td>$($process.Domain)</td>"
-  $systeminfoFragment += "<td>$($process.PartOfDomain)</td>"
-  $systeminfoFragment += "<td>$($process.WorkGroup)</td>"
-  $systeminfoFragment += "<td>$($process.CurrentTimeZone)</td>"
-  $systeminfoFragment += "<td>$($process.PCSystemType)</td>"
-  $systeminfoFragment += "<td>$($process.HyperVisorPresent)</td>"
-  $systeminfoFragment += "</tr>"
-}
-
-#OS Info
-#$OSinfo = Get-CimInstance -Class Win32_OperatingSystem   | Select-Object -Property Name, Description, Version, BuildNumber, InstallDate, SystemDrive, SystemDevice, WindowsDirectory, LastBootupTime, Locale, LocalDateTime, NumberofUsers, RegisteredUser, Organization, OSProductSuite | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
 $OSinfo = Get-CimInstance -Class Win32_OperatingSystem   | Select-Object -Property Name, Description, Version, BuildNumber, InstallDate, SystemDrive, SystemDevice, WindowsDirectory, LastBootupTime, Locale, LocalDateTime, NumberofUsers, RegisteredUser, Organization, OSProductSuite
 # Populate the HTML table with process information
 foreach ($process in $OSinfo) {
-  $OSinfoFragment += "<tr>"
-  $OSinfoFragment += "<td>$($process.Name)</td>"
-  $OSinfoFragment += "<td>$($process.Description)</td>"
-  $OSinfoFragment += "<td>$($process.Version)</td>"
-  $OSinfoFragment += "<td>$($process.BuildNumber)</td>"
-  $OSinfoFragment += "<td>$($process.InstallDate)</td>"
-  $OSinfoFragment += "<td>$($process.SystemDrive)</td>"
-  $OSinfoFragment += "<td>$($process.SystemDevice)</td>"
-  $OSinfoFragment += "<td>$($process.WindowsDirectory)</td>"
-  $OSinfoFragment += "<td>$($process.LastBootupTime)</td>"
-  $OSinfoFragment += "<td>$($process.Locale)</td>"
-  $OSinfoFragment += "<td>$($process.LocalDateTime)</td>"
-  $OSinfoFragment += "<td>$($process.NumberofUsers)</td>"
-  $OSinfoFragment += "<td>$($process.RegisteredUser)</td>"
-  $OSinfoFragment += "<td>$($process.Organization)</td>"
-  $OSinfoFragment += "<td>$($process.OSProductSuite)</td>"
-  $OSinfoFragment += "</tr>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Name</div><div class='kv-list-v'>$($process.Name)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Version</div><div class='kv-list-v'>$($process.Version)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Build Number</div><div class='kv-list-v'>$($process.BuildNumber)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Install Date</div><div class='kv-list-v'>$($process.InstallDate)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>System Drive</div><div class='kv-list-v'>$($process.SystemDrive)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Windows Directory</div><div class='kv-list-v'>$($process.WindowsDirectory)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Last Bootup Time</div><div class='kv-list-v'>$($process.LastBootupTime)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Number of Users</div><div class='kv-list-v'>$($process.NumberofUsers)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Registered User</div><div class='kv-list-v'>$($process.RegisteredUser)</div></div>"
+  $OSinfoFragment += "<div class='kv-list-row'><div class='kv-list-k'>Organization</div><div class='kv-list-v'>$($process.Organization)</div></div>"
 }
 
-#Hotfixes
-#$Hotfixes = Get-Hotfix | Select-Object -Property CSName, Caption, Description, HotfixID, InstalledBy, InstalledOn | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+
+$paths = @(
+  "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+  "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+)
+
+Get-ItemProperty $paths | Where-Object {$_.DisplayName} |
+Select-Object DisplayName, DisplayVersion, Publisher, InstallDate, InstallLocation, UninstallString | ForEach-Object {
+  $InstalledAppsFragment += "<tr>"
+  $InstalledAppsFragment += "<td>$($_.DisplayName)</td>"
+  $InstalledAppsFragment += "<td>$($_.DisplayVersion)</td>"
+  $InstalledAppsFragment += "<td>$($_.Publisher)</td>"
+  $InstalledAppsFragment += "<td>$($_.InstallDate)</td>"
+  $InstalledAppsFragment += "<td>$($_.InstallLocation)</td>"
+  $InstalledAppsFragment += "<td>$($_.UninstallString)</td>"
+  $InstalledAppsFragment += "</tr>"
+}
+
+
+$LogicalDrives = Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" | Select-Object @{N='Drive';E={$_.DeviceID}}, @{N='Label';E={$_.VolumeName}}, @{N='Size (GB)';E={[math]::Round($_.Size/1GB,2)}}, @{N='Free (GB)';E={[math]::Round($_.FreeSpace/1GB,2)}}, @{N='%Free';E={ if ($_.Size -gt 0) {[math]::Round(($_.FreeSpace/$_.Size)*100,2)} else {0} }}
+
+if ($LogicalDrives) {
+
+    foreach ($process in $LogicalDrives) {
+        $LogicalDrivesFragment += "<tr>"
+        $LogicalDrivesFragment += "<td>$($process.Drive)</td>"
+        $LogicalDrivesFragment += "<td>$($process.Label)</td>"
+        $LogicalDrivesFragment += "<td>$($process.'Size (GB)')</td>"
+        $LogicalDrivesFragment += "<td>$($process.'Free (GB)')</td>"
+        $LogicalDrivesFragment += "<td>$($process.'%Free')</td>"
+        $LogicalDrivesFragment += "</tr>"
+    }
+
+}
+else {
+   # $LogicalDrivesFragment = "<tr><td colspan='5'>No local fixed drives found.</td></tr>"
+}
+
+
+$interestingenv = 'PATH','TEMP','TMP','USERNAME','USERDOMAIN','COMPUTERNAME','APPDATA','LOCALAPPDATA','PROCESSOR_ARCHITECTURE','ProgramFiles','ProgramFiles(x86)'
+
+$envFragment = ""
+
+Get-ChildItem Env: | Where-Object { $interestingenv -contains $_.Name } |
+Select-Object Name, Value | ForEach-Object {
+  $envFragment += "<tr>"
+  $envFragment += "<td>$($_.Name)</td>"
+  $envFragment += "<td>$($_.Value)</td>"
+  $envFragment += "</tr>"
+}
+
+
 $Hotfixes = Get-Hotfix | Select-Object -Property CSName, Caption, Description, HotfixID, InstalledBy, InstalledOn
 # Populate the HTML table with process information
 foreach ($process in $Hotfixes) {
@@ -1127,8 +1064,7 @@ foreach ($process in $Hotfixes) {
   $HotfixesFragment += "</tr>"
 }
 
-#Get Windows Defender Status
-#$WinDefender = Get-MpComputerStatus | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+
 $WinDefender = Get-MpComputerStatus | Select-Object -Property AMProductVersion, AMRunningMode, AMServiceEnabled, AntispywareEnabled, AntispywareSignatureLastUpdated, AntivirusEnabled, AntivirusSignatureLastUpdated, BehaviorMonitorEnabled, DefenderSignaturesOutOfDate, DeviceControlPoliciesLastUpdated, DeviceControlState, NISSignatureLastUpdated, QuickScanEndTime, RealTimeProtectionEnabled
 # Populate the HTML table with process information
 foreach ($process in $WinDefender) {
@@ -1139,7 +1075,7 @@ foreach ($process in $WinDefender) {
   $WinDefenderFragment += "<td>$($process.AntispywareEnabled)</td>"
   $WinDefenderFragment += "<td>$($process.AntispywareSignatureLastUpdated)</td>"
   $WinDefenderFragment += "<td>$($process.AntivirusEnabled)</td>"
-  $WinDefenderFragment += "<td>$($process.AntivirusSignatureLastUpdatedn)</td>"
+  $WinDefenderFragment += "<td>$($process.AntivirusSignatureLastUpdated)</td>"
   $WinDefenderFragment += "<td>$($process.BehaviorMonitorEnabled)</td>"
   $WinDefenderFragment += "<td>$($process.DefenderSignaturesOutOfDate)</td>"
   $WinDefenderFragment += "<td>$($process.DeviceControlPoliciesLastUpdated)</td>"
@@ -1150,97 +1086,153 @@ foreach ($process in $WinDefender) {
   $WinDefenderFragment += "</tr>"
 }
 
-Write-ForensicLog "[!] Done" -Level SUCCESS -Section "SYSTEM_INFO"
 
-#endregion
+Write-ForensicLog "[!] Done" -Level SUCCESS -Section "SYSTEM_INFO"
 
 Write-ForensicLog ""
 
+#endregion
+
+
+
 ##################################################
-#region Live Running Processes & Scheduled Tasks #
+#region Live Running Processes & Startup programs #
 ##################################################
 
-Write-ForensicLog "[*] Gathering Processes and Tasks" -Level INFO -Section "PROCESSES"
+Write-ForensicLog "[*] Gathering Processes" -Level INFO -Section "PROCESSES"
 
 
-#$Processes = Get-Process | Select-Object Handles, StartTime, PM, VM, SI, id, ProcessName, Path, Product, FileVersion | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$Processes = Get-Process | Select-Object Handles, StartTime, PM, VM, SI, id, ProcessName, Path, Product, FileVersion
-# Populate the HTML table with process information
-foreach ($process in $Processes) {
-  $ProcessesFragment += "<tr>"
-  $ProcessesFragment += "<td>$($process.Handles)</td>"
-  $ProcessesFragment += "<td>$($process.StartTime)</td>"
-  $ProcessesFragment += "<td>$($process.PM)</td>"
-  $ProcessesFragment += "<td>$($process.VM)</td>"
-  $ProcessesFragment += "<td>$($process.SI)</td>"
-  $ProcessesFragment += "<td>$($process.id)</td>"
-  $ProcessesFragment += "<td>$($process.ProcessName)</td>"
-  $ProcessesFragment += "<td>$($process.Path)</td>"
-  $ProcessesFragment += "<td>$($process.Product)</td>"
-  $ProcessesFragment += "<td>$($process.FileVersion)</td>"
-  $ProcessesFragment += "</tr>"
+$processByPid = Get-Process -IncludeUserName -ErrorAction SilentlyContinue |
+    Group-Object -Property Id -AsHashTable -AsString
+
+$sigCache = @{}
+
+$ProcessFragment = foreach ($p in Get-CimInstance Win32_Process -ErrorAction SilentlyContinue) {
+
+    $gp = $processByPid["$($p.ProcessId)"]
+    if ($gp -is [Array]) { $gp = $gp[0] }
+
+    $sigStatus = ''
+    if ($p.ExecutablePath) {
+        if (-not $sigCache.ContainsKey($p.ExecutablePath)) {
+            $sigCache[$p.ExecutablePath] = (Get-AuthenticodeSignature -LiteralPath $p.ExecutablePath -ErrorAction SilentlyContinue).Status
+        }
+        $sigStatus = $sigCache[$p.ExecutablePath]
+    }
+
+    [PSCustomObject]@{
+        Name             = $p.Name
+        PID              = $p.ProcessId
+        PPID             = $p.ParentProcessId
+        UserName         = $gp.UserName
+        ExecutablePath   = $p.ExecutablePath
+        CommandLine      = $p.CommandLine
+        CPU              = $gp.CPU
+        MemoryMB         = [math]::Round($p.WorkingSetSize / 1MB, 2)
+        CreationDate     = $p.CreationDate
+        SignatureStatus  = $sigStatus
+    }
 }
 
-#Items set to run on startup
-#$StartupProgs = Get-CimInstance Win32_StartupCommand | Select-Object Command, User, Caption | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+function Encode-Cell {
+    param($Value)
+    if ($null -eq $Value) { return "" }
+    return [System.Net.WebUtility]::HtmlEncode([string]$Value)
+}
+
+# Verify it's populated
+#Write-Host "Captured $($ProcessFragment.Count) processes"
+
+# Then convert to HTML rows
+$ProcessFragmentrows = $ProcessFragment | ForEach-Object {
+  "<tr><td>$([System.Net.WebUtility]::HtmlEncode([string]$_.Name))</td><td>$($_.PID)</td><td>$($_.PPID)</td><td>$([System.Net.WebUtility]::HtmlEncode([string]$_.UserName))</td><td class='path-cell'>$([System.Net.WebUtility]::HtmlEncode([string]$_.ExecutablePath))</td><td class='cmd-cell'>$([System.Net.WebUtility]::HtmlEncode([string]$_.CommandLine))</td><td>$($_.CPU)</td><td>$($_.MemoryMB)</td><td>$($_.CreationDate)</td><td>$($_.SignatureStatus)</td></tr>"
+}
+
+
 $StartupProgs = Get-CimInstance Win32_StartupCommand | Select-Object Name, command, Location, User
 # Populate the HTML table with process information
 foreach ($process in $StartupProgs) {
   $StartupProgsFragment += "<tr>"
-  $StartupProgsFragment += "<td>$($process.Name)</td>"
-  $StartupProgsFragment += "<td>$($process.command)</td>"
-  $StartupProgsFragment += "<td>$($process.Location)</td>"
-  $StartupProgsFragment += "<td>$($process.User)</td>"
+  $StartupProgsFragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $StartupProgsFragment += "<td>$(Encode-Cell $process.command)</td>"
+  $StartupProgsFragment += "<td>$(Encode-Cell $process.Location)</td>"
+  $StartupProgsFragment += "<td>$(Encode-Cell $process.User)</td>"
   $StartupProgsFragment += "</tr>"
 }
 
-# Scheduled Tasks
-#$ScheduledTask = Get-ScheduledTask | Where-Object State -eq running | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$ScheduledTask = Get-ScheduledTask | Select-Object TaskPath, TaskName, State
-# Populate the HTML table with process information
-foreach ($process in $ScheduledTask) {
-  $ScheduledTaskFragment += "<tr>"
-  $ScheduledTaskFragment += "<td>$($process.TaskPath)</td>"
-  $ScheduledTaskFragment += "<td>$($process.TaskName)</td>"
-  $ScheduledTaskFragment += "<td>$($process.State)</td>"
-  $ScheduledTaskFragment += "</tr>"
-}
-
-# Get Running Tasks and Their state
-#$ScheduledTask2 = Get-ScheduledTask | Where-Object State -eq running | Get-ScheduledTaskInfo | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$ScheduledTask2 = Get-ScheduledTask | Get-ScheduledTaskInfo | Select-Object -Property LastRunTime, LastTaskResult, NextRunTime, NumberOfMissedRuns, TaskName, TaskPath, PSComputerName
-# Populate the HTML table with process information
-foreach ($process in $ScheduledTask2) {
-  $ScheduledTask2Fragment += "<tr>"
-  $ScheduledTask2Fragment += "<td>$($process.LastRunTime)</td>"
-  $ScheduledTask2Fragment += "<td>$($process.LastTaskResult)</td>"
-  $ScheduledTask2Fragment += "<td>$($process.NextRunTime)</td>"
-  $ScheduledTask2Fragment += "<td>$($process.NumberOfMissedRuns)</td>"
-  $ScheduledTask2Fragment += "<td>$($process.TaskName)</td>"
-  $ScheduledTask2Fragment += "<td>$($process.TaskPath)</td>"
-  $ScheduledTask2Fragment += "<td>$($process.PSComputerName)</td>"
-  $ScheduledTask2Fragment += "</tr>"
-}
-
-#Services
-#$Services = Get-Service | Select-Object Name, DisplayName, Status, StartType | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$Services = Get-Service | Select-Object -Property DisplayName, ServiceName, Status, StartType, @{Name = 'StartName'; Expression = { $_.StartName } }, @{Name = 'Description'; Expression = { (Get-CimInstance -Class Win32_Service -Filter "Name='$($_.Name)'").Description } }
-
-foreach ($process in $Services) {
-  $ServicesFragment += "<tr>"
-  $ServicesFragment += "<td>$($process.ServiceName)</td>"
-  $ServicesFragment += "<td>$($process.DisplayName)</td>"
-  $ServicesFragment += "<td>$($process.Status)</td>"
-  $ServicesFragment += "<td>$($process.StartType)</td>"
-  $ServicesFragment += "<td>$($process.Description)</td>"
-  $ServicesFragment += "</tr>"
-}
 
 Write-ForensicLog "[!] Done" -Level SUCCESS -Section "PROCESSES"
 
+Write-ForensicLog ""
+
 #endregion
 
+
+################################################################################
+#region Services                                                              ##
+################################################################################
+#$Services = Get-Service | Select-Object Name, DisplayName, Status, StartType | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+
+Write-ForensicLog "[*] Gathering Services" -Level INFO -Section "SERVICES"
+
+$Services = Get-CimInstance Win32_Service | Select-Object `
+    DisplayName,
+    Name,
+    State,
+    StartMode,
+    StartName,
+    @{Name='Command';Expression={$_.PathName}},
+    @{Name='BinaryPath';Expression={
+        if ($_.PathName -match '^"([^"]+)"') {
+            $matches[1]
+        } else {
+            ($_.PathName -split '\s+')[0]
+        }
+    }},
+    Description
+
+foreach ($process in $Services) {
+  $ServicesFragment += "<tr>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.DisplayName)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.State)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.StartMode)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.StartName)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.Command)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.BinaryPath)</td>"
+  $ServicesFragment += "<td>$(Encode-Cell $process.Description)</td>"
+  $ServicesFragment += "</tr>"
+}
+
+Write-ForensicLog "[!] Done" -Level SUCCESS -Section "SERVICES"
+
 Write-ForensicLog ""
+
+#endregion
+
+
+################################################################################
+#region Scheduled Tasks                                                      ##
+################################################################################
+
+Write-ForensicLog "[*] Gathering Scheduled Tasks" -Level INFO -Section "SCHEDULED_TASKS"
+
+$ScheduledTasksFragment = foreach ($t in Get-ScheduledTask) {
+    $info = $t | Get-ScheduledTaskInfo
+
+
+    "<tr><td>$(Encode-Cell $t.TaskName)</td><td>$(Encode-Cell $t.TaskPath)</td><td>$(Encode-Cell $t.State)</td><td>$(Encode-Cell $t.Principal.UserId)</td><td>$(Encode-Cell (($t.Actions | ForEach-Object { $_.Execute }) -join ', '))</td><td>$(Encode-Cell $info.LastRunTime)</td><td>$(Encode-Cell $info.NextRunTime)</td><td>$(Encode-Cell $info.LastTaskResult)</td></tr>"
+
+}
+
+Write-ForensicLog "[!] Done" -Level SUCCESS -Section "SCHEDULED_TASKS"
+
+Write-ForensicLog ""
+
+#endregion
+
+
+<#
 
 ##################################################
 #region Settings from the Registry			     #
@@ -1279,33 +1271,14 @@ Write-ForensicLog "[!] Done" -Level SUCCESS -Section "REGISTRY"
 #endregion
 
 Write-ForensicLog ""
+#>
+
 
 ##################################################
-#region Checking other worthwhiles			     #
+#region Files & USB			                         #
 ##################################################
 
-Write-ForensicLog "[*] Running Peripheral Checks..." -Level INFO -Section "PERIPHERAL_CHECKS"
-
-
-$LogicalDrives = Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, DriveType, FreeSpace, Size, VolumeName
-
-if ($LogicalDrives) {
-
-    foreach ($process in $LogicalDrives) {
-        $LogicalDrivesFragment += "<tr>"
-        $LogicalDrivesFragment += "<td>$($process.DeviceID)</td>"
-        $LogicalDrivesFragment += "<td>$($process.DriveType)</td>"
-        $LogicalDrivesFragment += "<td>$($process.FreeSpace)</td>"
-        $LogicalDrivesFragment += "<td>$($process.Size)</td>"
-        $LogicalDrivesFragment += "<td>$($process.VolumeName)</td>"
-        $LogicalDrivesFragment += "</tr>"
-    }
-
-}
-else {
-    $LogicalDrivesFragment += "<tr><td colspan='9' style='text-align:center;color:#27ae60;'>Nothing found</td></tr>"
-}
-
+Write-ForensicLog "[*] Gathering Files & USB Information" -Level INFO -Section "FILES_USB"
 
 #Gets list of USB devices
 #$USBDevices = Get-ItemProperty -Path HKLM:\System\CurrentControlSet\Enum\USB*\*\* | Select-Object FriendlyName, Driver, mfg, DeviceDesc | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1 
@@ -1421,10 +1394,11 @@ $shortcuts = foreach ($file in $lnkFiles) {
 if ($shortcuts) {
     foreach ($s in $shortcuts) {
         $LinkFilesFragment += "<tr>"
-        $LinkFilesFragment += "<td>$($s.Name)</td>"
-        $LinkFilesFragment += "<td>$($s.Target)</td>"
-        $LinkFilesFragment += "<td>$($s.Arguments)</td>"
-        $LinkFilesFragment += "<td>$($s.LastAccess)</td>"
+        $LinkFilesFragment += "<td>$(Encode-Cell $s.Name)</td>"
+        $LinkFilesFragment += "<td>$(Encode-Cell $s.Target)</td>"
+        $LinkFilesFragment += "<td>$(Encode-Cell $s.Arguments)</td>"
+        $LinkFilesFragment += "<td>$(Encode-Cell $s.LastAccess)</td>"
+        $LinkFilesFragment += "<td>$(Encode-Cell $s.Created)</td>"
         $LinkFilesFragment += "</tr>"
     }
 }
@@ -1432,11 +1406,6 @@ else {
     $LinkFilesFragment += "<tr><td colspan='4'>No shortcuts found</td></tr>"
 }
 
-
-
-#Gets last 100 days worth of Powershell History
-#$PSHistory = Get-History -count 500 | Select-Object id, commandline, startexecutiontime, endexecutiontime | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-#$PSHistory = Get-History -count 500 | Select-Object id, commandline, startexecutiontime, endexecutiontime
 
 
 $sessionHistory = Get-History -ErrorAction SilentlyContinue |
@@ -1458,8 +1427,8 @@ $PSHistory = @($sessionHistory) + @($fileHistory)
 if ($PSHistory) {
     foreach ($cmd in $PSHistory) {
         $PSHistoryFragment += "<tr>"
-        $PSHistoryFragment += "<td>$($cmd.User)</td>"
-        $PSHistoryFragment += "<td>$($cmd.Command)</td>"
+        $PSHistoryFragment += "<td>$(Encode-Cell $cmd.User)</td>"
+        $PSHistoryFragment += "<td>$(Encode-Cell $cmd.Command)</td>"
         $PSHistoryFragment += "</tr>"
     }
 }
@@ -1467,6 +1436,25 @@ else {
     $PSHistoryFragment += "<tr><td colspan='2'>No PowerShell history found</td></tr>"
 }
 
+#Gets all executables created in last 180 days in common user accessible locations. This may be a bit noisy but can be useful for identifying recently added files that may have been used for persistence or lateral movement. Perhaps export this as a separate CSV and make it keyword searchable?
+
+$paths = @(
+    "$env:USERPROFILE\AppData\Local\Temp",
+    "$env:USERPROFILE\AppData\Roaming",
+    "$env:USERPROFILE\Downloads",
+    "$env:USERPROFILE\Desktop",
+    "C:\Users\Public",
+    "C:\ProgramData"
+)
+
+$NewFiles = foreach ($path in $paths) {
+    Get-ChildItem $path -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.LastWriteTime -ge (Get-Date).AddDays(-180) -and
+        $_.Extension -match '\.exe|\.dll|\.ps1|\.bat|\.vbs|\.js'
+    } | ForEach-Object {
+        "<tr><td>$(Encode-Cell $_.Name)</td><td>$(Encode-Cell $_.Extension)</td><td>$(Encode-Cell $_.FullName)</td><td>$(Encode-Cell $_.LastWriteTime)</td><td>$(Encode-Cell ('{0} KB' -f [math]::Round($_.Length/1KB,2)))</td></tr>"
+    }
+}
 
 
 #All execs in Downloads folder. This may cause an error if the script is run from an external USB or Network drive.
@@ -1476,12 +1464,12 @@ $Downloads = Get-ChildItem C:\Users\*\Downloads\* -recurse | Select-Object  Name
 if ($Downloads) {
 foreach ($process in $Downloads) {
   $DownloadsFragment += "<tr>"
-  $DownloadsFragment += "<td>$($process.Name)</td>"
-  $DownloadsFragment += "<td>$($process.FullName)</td>"
-  $DownloadsFragment += "<td>$($process.CreationTimeUTC)</td>"
-  $DownloadsFragment += "<td>$($process.LastAccessTimeUTC)</td>"
-  $DownloadsFragment += "<td>$($process.LastWriteTimeUTC)</td>"
-  $DownloadsFragment += "<td>$($process.Attributes)</td>"
+  $DownloadsFragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $DownloadsFragment += "<td>$(Encode-Cell $process.FullName)</td>"
+  $DownloadsFragment += "<td>$(Encode-Cell $process.CreationTimeUTC)</td>"
+  $DownloadsFragment += "<td>$(Encode-Cell $process.LastAccessTimeUTC)</td>"
+  $DownloadsFragment += "<td>$(Encode-Cell $process.LastWriteTimeUTC)</td>"
+  $DownloadsFragment += "<td>$(Encode-Cell $process.Attributes)</td>"
   $DownloadsFragment += "</tr>"
 }
 } else {
@@ -1495,12 +1483,12 @@ $HiddenExecs1 = Get-ChildItem C:\Users\*\AppData\Local\Temp\* -recurse | Select-
 if ($HiddenExecs1) {
 foreach ($process in $HiddenExecs1) {
   $HiddenExecs1Fragment += "<tr>"
-  $HiddenExecs1Fragment += "<td>$($process.Name)</td>"
-  $HiddenExecs1Fragment += "<td>$($process.FullName)</td>"
-  $HiddenExecs1Fragment += "<td>$($process.CreationTimeUTC)</td>"
-  $HiddenExecs1Fragment += "<td>$($process.LastAccessTimeUTC)</td>"
-  $HiddenExecs1Fragment += "<td>$($process.LastWriteTimeUTC)</td>"
-  $HiddenExecs1Fragment += "<td>$($process.Attributes)</td>"
+  $HiddenExecs1Fragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $HiddenExecs1Fragment += "<td>$(Encode-Cell $process.FullName)</td>"
+  $HiddenExecs1Fragment += "<td>$(Encode-Cell $process.CreationTimeUTC)</td>"
+  $HiddenExecs1Fragment += "<td>$(Encode-Cell $process.LastAccessTimeUTC)</td>"
+  $HiddenExecs1Fragment += "<td>$(Encode-Cell $process.LastWriteTimeUTC)</td>"
+  $HiddenExecs1Fragment += "<td>$(Encode-Cell $process.Attributes)</td>"
   $HiddenExecs1Fragment += "</tr>"
 }
 } else {
@@ -1513,12 +1501,12 @@ $HiddenExecs2 = Get-ChildItem C:\Temp\* -recurse | Select-Object Name, FullName,
 if ($HiddenExecs2) {
 foreach ($process in $HiddenExecs2) {
   $HiddenExecs2Fragment += "<tr>"
-  $HiddenExecs2Fragment += "<td>$($process.Name)</td>"
-  $HiddenExecs2Fragment += "<td>$($process.FullName)</td>"
-  $HiddenExecs2Fragment += "<td>$($process.CreationTimeUTC)</td>"
-  $HiddenExecs2Fragment += "<td>$($process.LastAccessTimeUTC)</td>"
-  $HiddenExecs2Fragment += "<td>$($process.LastWriteTimeUTC)</td>"
-  $HiddenExecs2Fragment += "<td>$($process.Attributes)</td>"
+  $HiddenExecs2Fragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $HiddenExecs2Fragment += "<td>$(Encode-Cell $process.FullName)</td>"
+  $HiddenExecs2Fragment += "<td>$(Encode-Cell $process.CreationTimeUTC)</td>"
+  $HiddenExecs2Fragment += "<td>$(Encode-Cell $process.LastAccessTimeUTC)</td>"
+  $HiddenExecs2Fragment += "<td>$(Encode-Cell $process.LastWriteTimeUTC)</td>"
+  $HiddenExecs2Fragment += "<td>$(Encode-Cell $process.Attributes)</td>"
   $HiddenExecs2Fragment += "</tr>"
 }
 } else {
@@ -1531,12 +1519,12 @@ $HiddenExecs3 = Get-ChildItem C:\PerfLogs\* -recurse | Select-Object Name, FullN
 if ($HiddenExecs3) {
 foreach ($process in $HiddenExecs3) {
   $HiddenExecs3Fragment += "<tr>"
-  $HiddenExecs3Fragment += "<td>$($process.Name)</td>"
-  $HiddenExecs3Fragment += "<td>$($process.FullName)</td>"
-  $HiddenExecs3Fragment += "<td>$($process.CreationTimeUTC)</td>"
-  $HiddenExecs3Fragment += "<td>$($process.LastAccessTimeUTC)</td>"
-  $HiddenExecs3Fragment += "<td>$($process.LastWriteTimeUTC)</td>"
-  $HiddenExecs3Fragment += "<td>$($process.Attributes)</td>"
+  $HiddenExecs3Fragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $HiddenExecs3Fragment += "<td>$(Encode-Cell $process.FullName)</td>"
+  $HiddenExecs3Fragment += "<td>$(Encode-Cell $process.CreationTimeUTC)</td>"
+  $HiddenExecs3Fragment += "<td>$(Encode-Cell $process.LastAccessTimeUTC)</td>"
+  $HiddenExecs3Fragment += "<td>$(Encode-Cell $process.LastWriteTimeUTC)</td>"
+  $HiddenExecs3Fragment += "<td>$(Encode-Cell $process.Attributes)</td>"
   $HiddenExecs3Fragment += "</tr>"
 }
 } else {
@@ -1549,23 +1537,25 @@ $HiddenExecs4 = Get-ChildItem C:\Users\*\Documents\* -recurse |  Select-Object N
 if ($HiddenExecs4) {
 foreach ($process in $HiddenExecs4) {
   $HiddenExecs4Fragment += "<tr>"
-  $HiddenExecs4Fragment += "<td>$($process.Name)</td>"
-  $HiddenExecs4Fragment += "<td>$($process.FullName)</td>"
-  $HiddenExecs4Fragment += "<td>$($process.CreationTimeUTC)</td>"
-  $HiddenExecs4Fragment += "<td>$($process.LastAccessTimeUTC)</td>"
-  $HiddenExecs4Fragment += "<td>$($process.LastWriteTimeUTC)</td>"
-  $HiddenExecs4Fragment += "<td>$($process.Attributes)</td>"
+  $HiddenExecs4Fragment += "<td>$(Encode-Cell $process.Name)</td>"
+  $HiddenExecs4Fragment += "<td>$(Encode-Cell $process.FullName)</td>"
+  $HiddenExecs4Fragment += "<td>$(Encode-Cell $process.CreationTimeUTC)</td>"
+  $HiddenExecs4Fragment += "<td>$(Encode-Cell $process.LastAccessTimeUTC)</td>"
+  $HiddenExecs4Fragment += "<td>$(Encode-Cell $process.LastWriteTimeUTC)</td>"
+  $HiddenExecs4Fragment += "<td>$(Encode-Cell $process.Attributes)</td>"
   $HiddenExecs4Fragment += "</tr>"
 }
 } else {
     $HiddenExecs4Fragment += "<tr><td colspan='9' style='text-align:center;color:#27ae60;'>Nothing found</td></tr>"
 }
 
-Write-ForensicLog "[!] Done" -Level SUCCESS -Section "PERIPHERAL_CHECKS"
+Write-ForensicLog "[!] Done" -Level SUCCESS -Section "FILES_USB"
+
+Write-ForensicLog ""
 
 #endregion
 
-Write-ForensicLog ""
+
 
 ###########################################################################################################
 #region #######  VIEW USER GP RESULTS    ##################################################################
@@ -1578,7 +1568,7 @@ if ($cs.PartOfDomain) {
     
   Write-ForensicLog "[*] Collecting GPO Results" -Level INFO -Section "GPORESULT"
 
-  GPRESULT /H "$PSScriptRoot\$env:COMPUTERNAME\GPOReport.html" /F
+  GPRESULT /H "$PSScriptRoot\$env:COMPUTERNAME\GroupPolicy\GPOReport.html" /F
 
   Write-ForensicLog "[!] Done" -Level SUCCESS -Section "GPORESULT"
 }
@@ -1594,6 +1584,8 @@ Write-ForensicLog ""
 ###########################################################################################################
 #region  MEMORY (RAM) CAPTURE    ##########################################################################
 ###########################################################################################################
+
+
 
 if($RAM){
 
@@ -1652,25 +1644,25 @@ if($RAM){
     # Evaluation logic
     # ---------------------------------------------------------
     if($sizeMB -lt 100){
-        Write-ForensicLog "[!] RAM dump too small ($sizeMB MB) — acquisition likely failed" -Level ERROR -Section "RAM_CAPTURE" -Detail "Acquired RAM size is less than 100 MB. This may indicate acquisition failure, or antivirus blocking the tool from writing the dump."
+      Write-ForensicLog ("[!] RAM dump too small ({0} MB) - acquisition likely failed" -f $sizeMB) -Level ERROR -Section "RAM_CAPTURE" -Detail "Acquired RAM size is less than 100 MB. This may indicate acquisition failure, or antivirus blocking the tool from writing the dump."
     }
     else{
         if($proc.ExitCode -ne 0){
-            Write-ForensicLog -ForegroundColor Yellow "[!] RAM acquired but tool returned exit code $($proc.ExitCode) — likely non-critical" -Level WARNING -Section "RAM_CAPTURE" -Detail "winpmem returned a non-zero exit code ($($proc.ExitCode)). However, the RAM dump was created and is of a reasonable size. This may indicate a non-critical issue with the tool, or antivirus interference causing it to return an error code despite successful acquisition."
+            Write-ForensicLog "[!] RAM acquired but tool returned exit code $($proc.ExitCode) — likely non-critical" -Level WARN -Section "RAM_CAPTURE" -Detail "winpmem returned a non-zero exit code ($($proc.ExitCode)). However, the RAM dump was created and is of a reasonable size. This may indicate a non-critical issue with the tool, or antivirus interference causing it to return an error code despite successful acquisition."
         }
 
         if($percent -ge 90){
-            Write-ForensicLog "[+] RAM acquired — $rawPath ($sizeMB MB | ~$percent% of system RAM)" -Level INFO -Section "RAM_CAPTURE" -Detail "Acquired RAM size is 90% or more of expected system RAM. This is a strong indicator of successful acquisition, though antivirus interference cannot be fully ruled out."
+          Write-ForensicLog ("[+] RAM acquired - {0} ({1} MB | ~{2}% of system RAM)" -f $rawPath, $sizeMB, $percent) -Level INFO -Section "RAM_CAPTURE" -Detail "Acquired RAM size is 90% or more of expected system RAM. This is a strong indicator of successful acquisition, though antivirus interference cannot be fully ruled out."
         }
         elseif($percent -ge 70){
-            Write-ForensicLog "[!] RAM partially acquired — $rawPath ($sizeMB MB | ~$percent% of system RAM)" -Level WARNING -Section "RAM_CAPTURE" -Detail "Acquired RAM size is between 70% and 90% of expected system RAM. This may indicate partial acquisition or interference from antivirus software."
+          Write-ForensicLog ("[!] RAM partially acquired - {0} ({1} MB | ~{2}% of system RAM)" -f $rawPath, $sizeMB, $percent) -Level WARN -Section "RAM_CAPTURE" -Detail "Acquired RAM size is between 70% and 90% of expected system RAM. This may indicate partial acquisition or interference from antivirus software."
         }
         else{
-            Write-ForensicLog "[!] RAM acquisition incomplete — $rawPath ($sizeMB MB | ~$percent% of system RAM)" -Level ERROR -Section "RAM_CAPTURE" -Detail "Acquired RAM size is less than 70% of expected system RAM. This may indicate acquisition failure, or antivirus blocking the tool from writing the dump."
+          Write-ForensicLog ("[!] RAM acquisition incomplete - {0} ({1} MB | ~{2}% of system RAM)" -f $rawPath, $sizeMB, $percent) -Level ERROR -Section "RAM_CAPTURE" -Detail "Acquired RAM size is less than 70% of expected system RAM. This may indicate acquisition failure, or antivirus blocking the tool from writing the dump."
         }
 
         if($expectedMB -gt 0){
-            Write-ForensicLog "[i] Expected RAM: $expectedMB MB" -Level INFO -Section "RAM_CAPTURE" -Detail "System RAM as reported by WMI (Win32_ComputerSystem.TotalPhysicalMemory)"
+          Write-ForensicLog ("[i] Expected RAM: {0} MB" -f $expectedMB) -Level INFO -Section "RAM_CAPTURE" -Detail "System RAM as reported by WMI (Win32_ComputerSystem.TotalPhysicalMemory)"
         }
     }
 }
@@ -1681,8 +1673,8 @@ else{
     }
     else{
 
-        Write-ForensicLog "[!] winpmem not found at $winpmem" -Level WARNING -Section "RAM_CAPTURE" -Detail "Expected winpmem at $winpmem for physical RAM acquisition. This may be due to the tool not being present, or antivirus blocking it. Attempting fallback collection of volatile memory artefacts instead."
-        Write-ForensicLog "[!] Falling back to volatile memory snapshot (no physical RAM dump)" -Level WARNING -Section "RAM_CAPTURE"
+        Write-ForensicLog "[!] winpmem not found at $winpmem" -Level WARN -Section "RAM_CAPTURE" -Detail "Expected winpmem at $winpmem for physical RAM acquisition. This may be due to the tool not being present, or antivirus blocking it. Attempting fallback collection of volatile memory artefacts instead."
+        Write-ForensicLog "[!] Falling back to volatile memory snapshot (no physical RAM dump)" -Level WARN -Section "RAM_CAPTURE"
 
         # ---------------------------------------------------------
         # FALLBACK — volatile memory artefacts collectable without
@@ -1699,6 +1691,10 @@ else{
                                    VirtualSize, HandleCount,
                                    @{N="StartTime";E={$_.CreationDate}} |
                      Sort-Object WorkingSetSize -Descending
+
+
+
+
 
 
 
@@ -2092,7 +2088,7 @@ $NetFragment += @"
         # 4. Handles — open named pipes and mutants surface C2 IOCs
         # Requires SysInternals handle.exe for full fidelity
         # Best native alternative is querying WMI for named pipes
-        Write-ForensicLog -ForegroundColor DarkCyan "[*] Collecting named pipes..."
+        Write-ForensicLog "[*] Collecting named pipes..."
 
         $pipes = [System.IO.Directory]::GetFiles('\\.\pipe\') |
                  ForEach-Object { [PSCustomObject]@{ PipeName = $_ } }
@@ -2114,22 +2110,26 @@ $NetFragment += @"
             }
         }
         catch{
-            Write-ForensicLog "[!] Could not retrieve clipboard contents" -Level ERROR -Section "RAM_CAPTURE" -Details $_.Exception.Message
+            Write-ForensicLog "[!] Could not retrieve clipboard contents" -Level ERROR -Section "RAM_CAPTURE" -Detail $_.Exception.Message
         }
 
-        Write-ForensicLog "[!] Volatile snapshot complete — no physical RAM image" -Level WARNING -Section "RAM_CAPTURE"
-        Write-ForensicLog "[!] For full acquisition ensure winpmem is present and run the script with -RAM switch" -Level WARNING -Section "RAM_CAPTURE"
+        Write-ForensicLog "[!] Volatile snapshot complete — no physical RAM image" -Level WARN -Section "RAM_CAPTURE"
+        Write-ForensicLog "[!] For full acquisition ensure winpmem is present and run the script with -RAM switch" -Level WARN -Section "RAM_CAPTURE"
     }
 
-    Write-ForensicLog "[!] Done" -Level SUCCESS -Section "RAM_CAPTURE" -Details "RAM acquisition complete (physical dump or volatile snapshot)"
+    Write-ForensicLog "[!] Done" -Level SUCCESS -Section "RAM_CAPTURE" -Detail "RAM acquisition complete (physical dump or volatile snapshot)"
 }
 else{
     Write-ForensicLog "[!] RAM capture not selected...moving on" -Level INFO -Section "RAM_CAPTURE"
 }
 
-#endregion
+
 
 Write-ForensicLog ""
+
+#endregion
+
+
 
 
 ###########################################################################################################
@@ -2138,12 +2138,12 @@ Write-ForensicLog ""
 
 Write-ForensicLog "[*] Extracting Browser History" -Level INFO -Section "BROWSER_HISTORY"
 
-mkdir $PSScriptRoot\$env:COMPUTERNAME\BROWSING_HISTORY -ErrorAction SilentlyContinue | Out-Null
+#mkdir $PSScriptRoot\$env:COMPUTERNAME\BROWSING_HISTORY -ErrorAction SilentlyContinue | Out-Null
 
 $sqlitePath = "$PSScriptRoot\Forensicator-Share\sqlite3.exe"
 
 if(-not (Test-Path $sqlitePath)){
-    Write-ForensicLog "[!] sqlite3.exe not found at $sqlitePath — cannot extract SQLite-based history" -Level ERROR -Section "BROWSER_HISTORY" -Details "SQLLite not found in $sqlitePath SQLite-based browsers (Chrome, Edge, Firefox) will be skipped"
+    Write-ForensicLog "[!] sqlite3.exe not found at $sqlitePath — cannot extract SQLite-based history" -Level ERROR -Section "BROWSER_HISTORY" -Detail "SQLLite not found in $sqlitePath SQLite-based browsers (Chrome, Edge, Firefox) will be skipped"
    
 }
 
@@ -2166,7 +2166,12 @@ if($users.Count -eq 0){
              ForEach-Object { $_.FullName }
 }
 
-Write-ForensicLog "[*] Found $($users.Count) user profile(s) to process" -Level FINDING -Section "BROWSER_HISTORY" -Details "Number of Users Found: $($users.Count)"
+Write-ForensicLog "[*] Found $($users.Count) user profile(s) to process" -Level FINDING -Section "BROWSER_HISTORY" -Detail "Number of Users Found: $($users.Count)"
+
+# Accumulators — populated by Save-HistoryOutput during collection,
+# then injected directly into the main HTML report
+$script:BrowserFragmentRows = ''
+$script:IocHits             = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 # ---------------------------------------------------------
 # MALICIOUS URL LIST — used for flagging bad URLs in history
@@ -2215,7 +2220,7 @@ if(Test-Path $maliciousUrlsFilePath){
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and -not $_.StartsWith("#") } |
         ForEach-Object { [void]$maliciousDomainSet.Add($_.Trim().ToLower()) }
 
-    Write-ForensicLog "[*] Loaded $($maliciousDomainSet.Count) malicious domain(s)" -Level INFO -Section "BROWSER_HISTORY" -Details "Source: $($maliciousDomainSet.Count) domains from $urlSource"
+    Write-ForensicLog "[*] Loaded $($maliciousDomainSet.Count) malicious domain(s)" -Level INFO -Section "BROWSER_HISTORY" -Detail "Source: $($maliciousDomainSet.Count) domains from $urlSource"
 }
 
 # ---------------------------------------------------------
@@ -2295,7 +2300,7 @@ function Invoke-SQLiteQuery {
         return [PSCustomObject]@{ Rows = $results; Separator = $sep }
     }
     catch{
-        Write-Verbose "[!] SQLite query failed on $DbPath — $($_.Exception.Message)" -Level ERROR -Section "BROWSER_HISTORY" -Details "Failed to query $DbPath with query: $Query"
+        Write-ForensicLog "[!] SQLite query failed on $DbPath — $($_.Exception.Message)" -Level ERROR -Section "BROWSER_HISTORY" -Detail "Failed to query $DbPath with query: $Query"
         return [PSCustomObject]@{ Rows = @(); Separator = [char]0x1F }
     }
     finally{
@@ -2305,166 +2310,48 @@ function Invoke-SQLiteQuery {
 
 
 
-function Build-HistoryHtml {
-    param([array]$Records, [string]$Title)
 
-$htmlbrowser = @"
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>$Title</title>
-
-<style>
-
-body{
-    font-family: Segoe UI, Arial, sans-serif;
-    background:#f4f6f8;
-    margin:20px;
-}
-
-h2{
-    color:#2c3e50;
-}
-
-.summary{
-    background:white;
-    padding:10px;
-    margin-bottom:15px;
-    border-left:5px solid #3498db;
-    box-shadow:0 2px 4px rgba(0,0,0,0.1);
-}
-
-table{
-    border-collapse: collapse;
-    width:100%;
-    background:white;
-    box-shadow:0 2px 6px rgba(0,0,0,0.15);
-}
-
-th{
-    background:#34495e;
-    color:white;
-    padding:10px;
-    text-align:left;
-    position:sticky;
-    top:0;
-}
-
-td{
-    padding:8px;
-    border-bottom:1px solid #ddd;
-    font-size:13px;
-}
-
-tr:nth-child(even){
-    background:#f9fbfd;
-}
-
-tr:hover{
-    background:#eef6ff;
-}
-
-.malicious{
-    background:#ffdddd !important;
-    font-weight:bold;
-}
-
-.badge{
-    background:#e74c3c;
-    color:white;
-    padding:3px 6px;
-    border-radius:4px;
-    font-size:12px;
-}
-
-.clean{
-    color:#7f8c8d;
-}
-
-.url{
-    word-break:break-all;
-}
-
-</style>
-
-</head>
-<body>
-
-<h2>$Title</h2>
-
-<div class="summary">
-Total URLs: $($Records.Count) |
-Malicious URLs: $(( $Records | Where-Object {$_.IsMalicious}).Count)
-</div>
-
-<table>
-
-<thead>
-<tr>
-<th>User</th>
-<th>Browser</th>
-<th>Profile</th>
-<th>URL</th>
-<th>Last Visit</th>
-<th>Malicious</th>
-</tr>
-</thead>
-
-<tbody>
-"@
-
-foreach($r in $Records){
-
-$class = if($r.IsMalicious){ "class='malicious'" } else { "" }
-
-$htmlbrowser += "<tr $class>"
-
-$htmlbrowser += "<td>$(Escape-Html $r.User)</td>"
-$htmlbrowser += "<td>$($r.Browser)</td>"
-$htmlbrowser += "<td>$(Escape-Html $r.Profile)</td>"
-$htmlbrowser += "<td class='url'>$(Escape-Html $r.URL)</td>"
-$htmlbrowser += "<td>$($r.LastVisit)</td>"
-
-if($r.IsMalicious){
-$htmlbrowser += "<td><span class='badge'>MALICIOUS</span></td>"
-}
-else{
-$htmlbrowser += "<td><span class='clean'>Clean</span></td>"
-}
-
-$htmlbrowser += "</tr>"
-}
-
-$htmlbrowser += @"
-</tbody>
-</table>
-
-</body>
-</html>
-"@
-
-return $htmlbrowser
-}
 
 function Save-HistoryOutput {
     param([array]$Records, [string]$Browser, [string]$UserName, [string]$ProfileSuffix="")
 
-    if($Records.Count -eq 0){ return }
+    if ($Records.Count -eq 0) { return }
 
-    $safeSuffix = $ProfileSuffix -replace '[^a-zA-Z0-9_-]','_'
-    $fileBase   = "$PSScriptRoot\$env:COMPUTERNAME\BROWSING_HISTORY\${Browser}_${UserName}$(if($safeSuffix){"_$safeSuffix"})"
-    $title      = "$Browser — $UserName$(if($ProfileSuffix){" ($ProfileSuffix)"})"
+    # Accumulate rows directly into the main report's browser-tbody
+    foreach ($r in $Records) {
+        $iocCell = if ($r.IsMalicious) {
+            "<span style='color:#ef4444;font-weight:600;'>&#9888; IOC</span>"
+        } else {
+            "<td><span style='color:#7f8c8d;font-weight:600;'>Clean</span></td>"
+        }
+        $rowClass = if ($r.IsMalicious) { " class='ioc-row'" } else { "" }
+        $script:BrowserFragmentRows += "<tr$rowClass>"
+        $script:BrowserFragmentRows += "<td>$(Escape-Html $r.User)</td>"
+        $script:BrowserFragmentRows += "<td>$($r.Browser)</td>"
+        $script:BrowserFragmentRows += "<td>$(Escape-Html $r.Profile)</td>"
+        $script:BrowserFragmentRows += "<td class='url-cell'>$(Escape-Html $r.URL)</td>"
+        $script:BrowserFragmentRows += "<td>$($r.LastVisit)</td>"
+        $script:BrowserFragmentRows += "<td>$iocCell</td>"
+        $script:BrowserFragmentRows += "</tr>"
+    }
 
-    Build-HistoryHtml $Records $title |
-        Out-File "$fileBase.html" -Encoding UTF8
+    # Collect malicious hits for IOC_DATA JS variable
+    $Records | Where-Object { $_.IsMalicious } | ForEach-Object {
+        $script:IocHits.Add($_)
+    }
+<#
+    # Also export per-browser CSV for external analysis
+    $safeSuffix = $ProfileSuffix -replace '[^a-zA-Z0-9_-]', '_'
+    $csvBase    = "$PSScriptRoot\$env:COMPUTERNAME\BROWSING_HISTORY\${Browser}_${UserName}$(if($safeSuffix){"_$safeSuffix"})"
+    New-Item (Split-Path $csvBase) -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    $Records | Select-Object User, Browser, Profile, URL, LastVisit, IsMalicious |
+        Export-Csv "$csvBase.csv" -NoTypeInformation -Encoding UTF8 -ErrorAction SilentlyContinue
 
     $malicious = $Records | Where-Object { $_.IsMalicious }
-    if($malicious.Count -gt 0){
-        Build-HistoryHtml $malicious "MALICIOUS — $title" |
-            Out-File "$PSScriptRoot\$env:COMPUTERNAME\BROWSING_HISTORY\MALICIOUS_${Browser}_${UserName}$(if($safeSuffix){"_$safeSuffix"}).html" -Encoding UTF8
-        Write-ForensicLog "[!] $($malicious.Count) malicious URL(s) in $Browser history — $UserName$(if($ProfileSuffix){" / $ProfileSuffix"})" -Level FINDING -Section "BROWSER_HISTORY" -Details "$($malicious.Count) malicious URL(s) found in $Browser history for user $UserName$(if($ProfileSuffix){" / profile $ProfileSuffix"})"
+    if ($malicious.Count -gt 0) {
+        Write-ForensicLog "[!] $($malicious.Count) malicious URL(s) in $Browser history — $UserName$(if($ProfileSuffix){" / $ProfileSuffix"})" -Level FINDING -Section "BROWSER_HISTORY" -Detail "$($malicious.Count) malicious URL(s) found in $Browser history for user $UserName$(if($ProfileSuffix){" / profile $ProfileSuffix"})"
     }
+#>
 }
 
 # ---------------------------------------------------------
@@ -2628,7 +2515,7 @@ $chromiumBrowsers = @(
 
 foreach($user in $users){
     $userName = Split-Path $user -Leaf
-    Write-ForensicLog "[*] Processing $userName" -Level INFO -Section "BROWSER_HISTORY" -Details "Processing user profile at $user"
+    Write-ForensicLog "[*] Processing $userName" -Level INFO -Section "BROWSER_HISTORY" -Detail "Processing user profile at $user"
 
     foreach($browser in $chromiumBrowsers){
         Process-ChromiumBrowser -UserPath $user `
@@ -2640,7 +2527,7 @@ foreach($user in $users){
     Process-IEHistory      $user
 }
 
-Write-ForensicLog "[!] Browser history extraction complete — results in BROWSING_HISTORY\" -Level SUCCESS -Section "BROWSER_HISTORY"
+Write-ForensicLog "[!] Browser history extraction complete" -Level SUCCESS -Section "BROWSER_HISTORY"
 
 
 #endregion
@@ -2656,7 +2543,7 @@ if($RANSOMWARE){
 
   Write-ForensicLog ""
     Write-ForensicLog "[*] Checking For Ransomware Indicators" -Level INFO -Section "RANSOMWARE_SCAN"
-    Write-ForensicLog "[!] NOTE: This may take a while depending on disk size" -Level WARNING -Section "RANSOMWARE_SCAN"
+    Write-ForensicLog "[!] NOTE: This may take a while depending on disk size" -Level WARN -Section "RANSOMWARE_SCAN"
 
     # ---------------------------------------------------------
     # KNOWN PLAINTEXT-HEADER EXTENSIONS
@@ -2685,7 +2572,7 @@ if($RANSOMWARE){
     if($null -ne $configData -and $configData.PSObject.Properties["Ransomeware_Extensions"]){
         $configData.Ransomeware_Extensions |
             ForEach-Object { [void]$ransomExtensionSet.Add($_) }
-        Write-ForensicLog "[*] Loaded $($ransomExtensionSet.Count) ransomware extension(s) from config" -Level INFO -Section "RANSOMWARE_SCAN" -Details "Source: $($ransomExtensionSet.Count) extensions from config"
+        Write-ForensicLog "[*] Loaded $($ransomExtensionSet.Count) ransomware extension(s) from config" -Level INFO -Section "RANSOMWARE_SCAN" -Detail "Source: $($ransomExtensionSet.Count) extensions from config"
     }
 
     # ---------------------------------------------------------
@@ -2697,7 +2584,7 @@ if($RANSOMWARE){
     $tempExtract     = "$env:TEMP\ransomnotes_$(New-Guid)"
 
     if(-not (Test-Path $ransomNotesFile)){
-        Write-ForensicLog "[*] Downloading ransomware note dataset..." -Level INFO -Section "RANSOMWARE_SCAN" -Details "Attempting to download ransomware note dataset from $repoUrl"
+        Write-ForensicLog "[*] Downloading ransomware note dataset..." -Level INFO -Section "RANSOMWARE_SCAN" -Detail "Attempting to download ransomware note dataset from $repoUrl"
         try{
             $tcp       = [System.Net.Sockets.TcpClient]::new()
             $reachable = $tcp.ConnectAsync("github.com", 443).Wait(3000)
@@ -2712,14 +2599,14 @@ if($RANSOMWARE){
                     Sort-Object -Unique |
                     Out-File $ransomNotesFile -Encoding UTF8
 
-                Write-ForensicLog "[+] Ransom note list saved ($ransomNotesFile)" -Level INFO -Section "RANSOMWARE_SCAN" -Details "Ransom note list saved to $ransomNotesFile"
+                Write-ForensicLog "[+] Ransom note list saved ($ransomNotesFile)" -Level INFO -Section "RANSOMWARE_SCAN" -Detail "Ransom note list saved to $ransomNotesFile"
             }
             else{
-                Write-ForensicLog "[!] github.com unreachable — skipping note dataset download" -Level WARNING -Section "RANSOMWARE_SCAN" -Details "Could not reach github.com to download ransomware note dataset"
+                Write-ForensicLog "[!] github.com unreachable — skipping note dataset download" -Level WARN -Section "RANSOMWARE_SCAN" -Detail "Could not reach github.com to download ransomware note dataset"
             }
         }
         catch{
-            Write-ForensicLog "[!] Failed to download ransomware notes: $($_.Exception.Message)" -Level ERROR -Section "RANSOMWARE_SCAN" -Details "Attempted Download from URL: $repoUrl Failed"
+            Write-ForensicLog "[!] Failed to download ransomware notes: $($_.Exception.Message)" -Level ERROR -Section "RANSOMWARE_SCAN" -Detail "Attempted Download from URL: $repoUrl Failed"
         }
         finally{
             Remove-Item $tempZip      -Force -ErrorAction SilentlyContinue
@@ -2736,7 +2623,7 @@ if($RANSOMWARE){
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             ForEach-Object { [void]$ransomNoteSet.Add($_.Trim()) }
     }
-    Write-ForensicLog "[*] Loaded $($ransomNoteSet.Count) ransom note indicator(s)" -Level INFO -Section "RANSOMWARE_SCAN" -Details "Source: $($ransomNoteSet.Count) note names from $repoUrl"
+    Write-ForensicLog "[*] Loaded $($ransomNoteSet.Count) ransom note indicator(s)" -Level INFO -Section "RANSOMWARE_SCAN" -Detail "Source: $($ransomNoteSet.Count) note names from $repoUrl"
 
     # ---------------------------------------------------------
     # ENTROPY — samples beginning, middle, and end of file
@@ -2807,7 +2694,7 @@ if($RANSOMWARE){
             }
         }
         else{
-            Write-ForensicLog "[+] $($vssSnapshots.Count) VSS snapshot(s) still present" -Level INFO -Section "RANSOMWARE_SCAN" -Details "Snapshot count: $($vssSnapshots.Count) — presence of snapshots does not rule out ransomware but is a positive sign"
+            Write-ForensicLog "[+] $($vssSnapshots.Count) VSS snapshot(s) still present" -Level INFO -Section "RANSOMWARE_SCAN" -Detail "Snapshot count: $($vssSnapshots.Count) — presence of snapshots does not rule out ransomware but is a positive sign"
         }
 
         # Method 2 — Security event log: Process creation events (4688)
@@ -2822,13 +2709,7 @@ if($RANSOMWARE){
         )
 
         try{
-            # Look back 7 days for process creation events
-            $cutoff = (Get-Date).AddDays(-7)
-            $events = Get-WinEvent -FilterHashtable @{
-                LogName   = 'Security'
-                Id        = 4688
-                StartTime = $cutoff
-            } -ErrorAction SilentlyContinue |
+            $events = Get-ForensicWinEvent -LogName 'Security' -Id 4688 -ProviderName 'Microsoft-Windows-Security-Auditing' |
             Where-Object {
                 $msg = $_.Message
                 $deletionPatterns | Where-Object { $msg -match $_ }
@@ -2843,16 +2724,12 @@ if($RANSOMWARE){
             }
         }
         catch{
-            Write-Verbose "[!] Could not query Security event log — may need elevated privileges" -Level ERROR -Section "RANSOMWARE_SCAN"
+            Write-ForensicLog "[!] Could not query Security event log — may need elevated privileges" -Level ERROR -Section "RANSOMWARE_SCAN"
         }
 
         # Method 3 — PowerShell/System event logs for wbadmin/vssadmin
         try{
-            $psEvents = Get-WinEvent -FilterHashtable @{
-                LogName   = 'Microsoft-Windows-PowerShell/Operational'
-                Id        = 4104
-                StartTime = (Get-Date).AddDays(-7)
-            } -ErrorAction SilentlyContinue |
+            $psEvents = Get-ForensicWinEvent -LogName 'Microsoft-Windows-PowerShell/Operational' -Id 4104 |
             Where-Object {
                 $msg = $_.Message
                 $deletionPatterns | Where-Object { $msg -match $_ }
@@ -2923,7 +2800,7 @@ if($RANSOMWARE){
     foreach($scanPath in $ScanPaths){
         if(-not (Test-Path $scanPath)){ continue }
 
-        Write-ForensicLog "[*] Scanning $scanPath ..." -Level INFO -Section "RANSOMWARE_SCAN" -Details "Scanning $scanPath for ransom notes, suspicious extensions, high entropy, and recent modifications"
+        Write-ForensicLog "[*] Scanning $scanPath ..." -Level INFO -Section "RANSOMWARE_SCAN" -Detail "Scanning $scanPath for ransom notes, suspicious extensions, high entropy, and recent modifications"
 
         Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue |
         ForEach-Object {
@@ -3030,11 +2907,11 @@ if($RANSOMWARE){
     # ---------------------------------------------------------
     Write-Host ""
     Write-ForensicLog "[!] Ransomware Scan Summary" -Level INFO -Section "RANSOMWARE_SCAN"
-    Write-ForensicLog "    Ransom notes detected       : $($RansomNotesFound.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Details "$($RansomNotesFound.Count) Files matching known ransom note names"
-    Write-ForensicLog "    Ransomware extensions found : $($RansomExtFiles.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Details "$($RansomExtFiles.Count) Files with known ransomware extensions"
-    Write-ForensicLog "    High entropy files          : $($HighEntropyFiles.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Details "$($HighEntropyFiles.Count) Files with high entropy indicating possible encryption"
-    Write-ForensicLog "    Files modified in last hour : $($RecentFiles.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Details "$($RecentFiles.Count) Files modified within the last hour"
-    Write-ForensicLog "    Shadow deletion indicators  : $($ShadowIndicators.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Details "$($ShadowIndicators.Count) Indicators of shadow copy deletion"
+    Write-ForensicLog "    Ransom notes detected       : $($RansomNotesFound.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Detail "$($RansomNotesFound.Count) Files matching known ransom note names"
+    Write-ForensicLog "    Ransomware extensions found : $($RansomExtFiles.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Detail "$($RansomExtFiles.Count) Files with known ransomware extensions"
+    Write-ForensicLog "    High entropy files          : $($HighEntropyFiles.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Detail "$($HighEntropyFiles.Count) Files with high entropy indicating possible encryption"
+    Write-ForensicLog "    Files modified in last hour : $($RecentFiles.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Detail "$($RecentFiles.Count) Files modified within the last hour"
+    Write-ForensicLog "    Shadow deletion indicators  : $($ShadowIndicators.Count)" -Level FINDING -Section "RANSOMWARE_SCAN" -Detail "$($ShadowIndicators.Count) Indicators of shadow copy deletion"
 
     if($RansomNotesFound.Count -gt 0 -or $RansomExtFiles.Count -gt 0){
         Write-ForensicLog "[!] RANSOMWARE INDICATORS FOUND — escalate immediately" -Level FINDING -Section "RANSOMWARE_SCAN"
@@ -3046,7 +2923,7 @@ if($RANSOMWARE){
         Write-ForensicLog "[!] Shadow copy deletion detected — possible ransomware preparation" -Level FINDING -Section "RANSOMWARE_SCAN"
     }
 
-    Write-ForensicLog -ForegroundColor Cyan "[!] Done"
+    Write-ForensicLog "[!] Done"
 
     
 } else {
@@ -3069,6 +2946,9 @@ Write-ForensicLog ""
 
 # Read and parse the configuration file
 #$configData = Get-Content $configFile | ConvertFrom-Json
+
+<#
+
 
 mkdir $PSScriptRoot\$env:COMPUTERNAME\PCAP -ErrorAction SilentlyContinue | Out-Null
 
@@ -3099,11 +2979,11 @@ Start-Sleep -Seconds $netshduration
 Stop-NetEventSession -Name $session
 Remove-NetEventSession -Name $session
 
-Write-ForensicLog "[!] Trace Completed — ETL saved to $etlPath" -Level SUCCESS -Section "NETWORKTRACE" -Details "Captured $netshduration seconds of network traffic to $etlPath"
+Write-ForensicLog "[!] Trace Completed — ETL saved to $etlPath" -Level SUCCESS -Section "NETWORKTRACE" -Detail "Captured $netshduration seconds of network traffic to $etlPath"
 
 #endregion
 
-
+#>
 
 if($PCAP){
 
@@ -3127,7 +3007,7 @@ if($PCAP){
 
         pktmon stop | Out-Null
 
-        Write-ForensicLog "[!] Capture complete — PCAP saved to $pcapPath" -Level SUCCESS -Section "NETWORKTRACE" -Details "Captured $netshduration seconds of network traffic to $pcapPath"
+        Write-ForensicLog "[!] Capture complete — PCAP saved to $pcapPath" -Level SUCCESS -Section "NETWORKTRACE" -Detail "Captured $netshduration seconds of network traffic to $pcapPath"
 
     }
     else{
@@ -3192,7 +3072,7 @@ if ($EVTX) {
   $servername = $env:computername
 
   # Provide the path with ending "\" to store the log file extraction.
-  $destinationpath = "$PSScriptRoot\$env:COMPUTERNAME\EVTLOGS\"
+  $destinationpath = "$PSScriptRoot\$env:COMPUTERNAME\EVTX\"
 
   # If the destination path does not exist it will create it
   if (!(Test-Path -Path $destinationpath)) {
@@ -3226,7 +3106,7 @@ if ($EVTX) {
   $TotalTime = $StopWatch.Elapsed.TotalSeconds
   $TotalTime = [math]::Round($totalTime, 2)
 
-  Write-ForensicLog "[!] Extracting the logs took $TotalTime to Complete." -Level SUCCESS -Section "EVENTLOGS" -Details "Time taken to extract logs: $TotalTime seconds"
+  Write-ForensicLog "[!] Extracting the logs took $TotalTime to Complete." -Level SUCCESS -Section "EVENTLOGS" -Detail "Time taken to extract logs: $TotalTime seconds"
 
 
 } 
@@ -3411,6 +3291,8 @@ $scanConfig = [ordered]@{
     #>
 }
 
+
+
 # Paths to always skip regardless of scan tier
 # Add any known-clean noisy directories here
 $skipPaths = @(
@@ -3473,7 +3355,7 @@ if($needsDownload){
 }
 
 if(-not (Test-Path $hashFilePath)){
-    Write-ForensicLog "No hash file available — cannot proceed" -Level ERROR -Section "HASHLOOKUP" -Details "Hash lookup stage requires a local hash file. Attempted to download from $hashSource but failed. Check network connectivity and try again."
+    Write-ForensicLog "No hash file available — cannot proceed" -Level ERROR -Section "HASHLOOKUP" -Detail "Hash lookup stage requires a local hash file. Attempted to download from $hashSource but failed. Check network connectivity and try again."
 }
 
 # ---------------------------------------------------------
@@ -3676,7 +3558,7 @@ Write-ForensicLog "Scan complete — Scanned: $total | Matches: $($hashMatches.C
 
 if($hashMatches.Count -gt 0){
     foreach($m in $hashMatches){
-        $HashMatchFragment += "<tr style='background-color:#ffcccc;'>"
+        $HashMatchFragment += "<tr>"
         $HashMatchFragment += "<td>$($m.DetectedFile)</td>"
         $HashMatchFragment += "<td>$($m.Extension)</td>"
         $HashMatchFragment += "<td>$($m.FileSizeKB)</td>"
@@ -3698,7 +3580,7 @@ if($hashMatches.Count -gt 0){
                       -Level FINDING -Section "HASHLOOKUP"
 }
 else{
-    $HashMatchFragment += "<tr><td colspan='10' style='text-align:center;color:#27ae60;'>No hash matches found across $total files scanned</td></tr>"
+    #$HashMatchFragment += "<tr><td colspan='10' style='text-align:center;color:#27ae60;'>No hash matches found across $total files scanned</td></tr>"
 }
 
 
@@ -3724,6 +3606,162 @@ Write-ForensicLog ""
 #region     EVENT LOG ANALYSIS SECTION		     	     #################################################################
 ######################################################################################################################
 ######################################################################################################################
+
+
+# configuration file path
+$configFile = "$PSScriptRoot\config.json"
+
+# Read and parse the configuration file
+$configData = Get-Content $configFile | ConvertFrom-Json
+
+
+function ConvertTo-ConfigStringArray {
+  param($Value)
+
+  if($null -eq $Value){
+    return @()
+  }
+
+  return @(
+    @($Value) |
+      ForEach-Object { [string]$_ } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+      Select-Object -Unique
+  )
+}
+
+function ConvertTo-ConfigPositiveInt {
+  param(
+    $Value,
+    [int]$Default,
+    [string]$Name
+  )
+
+  $parsed = 0
+  if($null -ne $Value -and [int]::TryParse([string]$Value, [ref]$parsed) -and $parsed -gt 0){
+    return $parsed
+  }
+
+  if($null -ne $Value){
+    Write-ForensicLog "Invalid $Name in config.json — using default" -Level WARN -Section "CONFIG" -Detail "Configured value: $Value | Default: $Default"
+  }
+
+  return $Default
+}
+
+$eventLogConfig = $null
+if($null -ne $configData -and $configData.PSObject.Properties["eventlog"]){
+  $eventLogConfig = $configData.eventlog
+}
+elseif($null -ne $configData -and $configData.PSObject.Properties["event_log"]){
+  $eventLogConfig = $configData.event_log
+}
+
+$script:EventLogDaysBack = 30
+if($null -ne $eventLogConfig -and $eventLogConfig.PSObject.Properties["days_back"]){
+  $script:EventLogDaysBack = ConvertTo-ConfigPositiveInt -Value $eventLogConfig.days_back -Default 30 -Name "eventlog.days_back"
+}
+elseif($null -ne $configData -and $configData.PSObject.Properties["sigma"] -and $configData.sigma.PSObject.Properties["days_back"]){
+  $script:EventLogDaysBack = ConvertTo-ConfigPositiveInt -Value $configData.sigma.days_back -Default 30 -Name "sigma.days_back"
+}
+
+$script:EventLogEndTime   = Get-Date
+$script:EventLogStartTime = $script:EventLogEndTime.AddDays(-$script:EventLogDaysBack)
+$script:ForensicEventDateFormat = "yyyy-MM-dd HH:mm:ss"
+
+function Format-ForensicEventTime {
+  param($Value)
+
+  if($null -eq $Value){
+    return ""
+  }
+
+  $dateTime = [datetime]::MinValue
+  if($Value -is [datetime]){
+    $dateTime = [datetime]$Value
+  }
+  elseif(-not [datetime]::TryParse([string]$Value, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal, [ref]$dateTime)){
+    return [string]$Value
+  }
+
+  if($dateTime.Kind -eq [System.DateTimeKind]::Utc){
+    $dateTime = $dateTime.ToLocalTime()
+  }
+
+  return $dateTime.ToString($script:ForensicEventDateFormat, [System.Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-ForensicWinEvent {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$LogName,
+    [int[]]$Id,
+    [string]$ProviderName,
+    [switch]$UseProviderFilter,
+    [datetime]$StartTime = $script:EventLogStartTime,
+    [datetime]$EndTime = $script:EventLogEndTime,
+    [int]$MaxEvents = 0
+  )
+
+  $safeLogName = [System.Security.SecurityElement]::Escape($LogName)
+  $systemClauses = [System.Collections.Generic.List[string]]::new()
+
+  $eventIdClauses = @($Id | Where-Object { $_ -gt 0 } | ForEach-Object { "EventID=$([int]$_)" })
+  if($eventIdClauses.Count -gt 0){
+    $systemClauses.Add("(" + ($eventIdClauses -join " or ") + ")")
+  }
+
+  if($UseProviderFilter -and -not [string]::IsNullOrWhiteSpace($ProviderName)){
+    $safeProviderName = [System.Security.SecurityElement]::Escape($ProviderName)
+    $systemClauses.Add("Provider[@Name='$safeProviderName']")
+  }
+
+  if($null -ne $StartTime){
+    $startTimeUtc = $StartTime.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+    $systemClauses.Add("TimeCreated[@SystemTime&gt;='$startTimeUtc']")
+  }
+
+  if($null -ne $EndTime){
+    $endTimeUtc = $EndTime.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+    $systemClauses.Add("TimeCreated[@SystemTime&lt;='$endTimeUtc']")
+  }
+
+  $systemFilter = $systemClauses -join " and "
+  if([string]::IsNullOrWhiteSpace($systemFilter)){
+    $systemFilter = "*"
+  }
+
+  $query = [xml]@"
+<QueryList>
+  <Query Id="0" Path="$safeLogName">
+    <Select Path="$safeLogName">*[System[$systemFilter]]</Select>
+  </Query>
+</QueryList>
+"@
+
+  $queryParams = @{
+    FilterXml   = $query
+    ErrorAction = "Stop"
+  }
+  if($MaxEvents -gt 0){
+    $queryParams.MaxEvents = $MaxEvents
+  }
+
+  try{
+    return @(Get-WinEvent @queryParams)
+  }
+  catch{
+    if($_.Exception.Message -match "No events were found|No matching events|No matches found"){
+      return @()
+    }
+    throw
+  }
+}
+
+Write-ForensicLog "EventLog lookback resolved" -Level INFO -Section "EventLog" -Detail "DaysBack: $script:EventLogDaysBack | Start: $(Format-ForensicEventTime $script:EventLogStartTime) | End: $(Format-ForensicEventTime $script:EventLogEndTime)"
+
+
 <#
 $logonTypeMap = @{
     "2"  = @{ Name="Interactive";        Risk="Medium"; Note="Console/RunAs logon" }
@@ -3736,8 +3774,8 @@ $logonTypeMap = @{
     "10" = @{ Name="RemoteInteractive";  Risk="Medium"; Note="RDP" }
     "11" = @{ Name="CachedInteractive";  Risk="Medium"; Note="Cached credentials" }
 }
-#>
-<#
+
+
 $failureReasons = @{
     "0xC000005E" = "No logon servers available"
     "0xC0000064" = "Username does not exist"
@@ -3750,13 +3788,18 @@ $failureReasons = @{
     "0xC0000072" = "Account disabled"
     "0xC0000193" = "Account expired"
     "0xC0000224" = "Password must change"
-    "0xC0000234" = "Account locked out"
+    "0xC0000234" = "Account locked out
     "0xC00002EE" = "An error occurred during logon"
 }
+
 #>
+
 #############################################################################################################
 #region   EVENT LOG ANALYSIS — GROUP ENUMERATION (4798 / 4799)
 #############################################################################################################
+
+
+
 
 
 Write-ForensicLog "[*] Checking for user/group enumeration events" -Level INFO -Section "EventLog"
@@ -3766,8 +3809,7 @@ $GroupMembershipID = @(
   4799
 
 )
-$GroupMembershipFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $GroupMembershipID }
-$GroupMembership = Get-WinEvent -FilterHashtable $GroupMembershipFilter | ForEach-Object {
+$GroupMembership = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $GroupMembershipID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $GroupMembershipEventXml = ([xml]$_.ToXml()).Event
   $GroupMembershipEnumAccount = ($GroupMembershipEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
@@ -3777,7 +3819,7 @@ $GroupMembership = Get-WinEvent -FilterHashtable $GroupMembershipFilter | ForEac
   $GroupMembershipPerformedPName = ($GroupMembershipEventXml.EventData.Data | Where-Object { $_.Name -eq 'CallerProcessName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time        = [DateTime]$GroupMembershipEventXml.System.TimeCreated.SystemTime
+    Time        = Format-ForensicEventTime $_.TimeCreated
     PerformedOn = $GroupMembershipEnumAccount
     PerformedBy = $GroupMembershipPerformedBy
     LogonType   = $GroupMembershipPerformedLogon
@@ -3793,12 +3835,12 @@ if ($GroupMembership.Count -eq 0) {
 # Populate the HTML table with process information
 foreach ($process in $GroupMembership) {
   $GroupMembershipFragment += "<tr>"
-  $GroupMembershipFragment += "<td>$([DateTime]$process.Time)</td>"
-  $GroupMembershipFragment += "<td>$($process.PerformedOn)</td>"
-  $GroupMembershipFragment += "<td>$($process.PerformedBy)</td>"
-  $GroupMembershipFragment += "<td>$($process.LogonType)</td>"
+  $GroupMembershipFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.Time))</td>"
+  $GroupMembershipFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$($process.PerformedOn)))</td>"
+  $GroupMembershipFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$($process.PerformedBy)))</td>"
+  $GroupMembershipFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$($process.LogonType)))</td>"
   $GroupMembershipFragment += "<td>$($process.PID)</td>"
-  $GroupMembershipFragment += "<td>$($GroupMembershipPerformedPName)</td>"
+  $GroupMembershipFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$($process.ProcessName)))</td>"
   $GroupMembershipFragment += "</tr>"
 }
 
@@ -3814,39 +3856,54 @@ Write-ForensicLog "[!] Done" -Level SUCCESS -Section "EventLog"
 
 Write-ForensicLog "[*] Fetching RDP Logins" -Level INFO -Section "EventLog"
 
-$RDPGroupID = @(
-  4624,
-  4778
-)
+$RDPLoginsGroupIDs = @(4624, 4778)
 
-$RDPFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $RDPGroupID } 
-$RDPLogins = Get-WinEvent -FilterHashtable $RDPFilter | Where-Object { $_.properties[8].value -eq 10 } | ForEach-Object {
-  # convert the event to XML and grab the Event node
-  $RDPEventXml = ([xml]$_.ToXml()).Event
-  $RDPLogonUser = ($RDPEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
-  $RDPLogonUserDomain = ($RDPEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetDomainName' }).'#text'
-  $RDPLogonIP = ($RDPEventXml.EventData.Data | Where-Object { $_.Name -eq 'IpAddress' }).'#text'
-  # output the properties you need
-  [PSCustomObject]@{
-    Time            = [DateTime]$RDPEventXml.System.TimeCreated.SystemTime
-    LogonUser       = $RDPLogonUser
-    LogonUserDomain = $RDPLogonUserDomain
-    LogonIP         = $RDPLogonIP
-  }
-} #| ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+$RDPLogins = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $RDPLoginsGroupIDs | ForEach-Object {
+    $eventId = $_.Id
+    $xml     = ([xml]$_.ToXml()).Event
+    $data    = $xml.EventData.Data
 
-if ($RDPLogins.Count -eq 0) {
-    $RDPLoginsFragment += "<tr><td colspan='4' style='text-align:center;color:#27ae60;'>No RDP logins found</td></tr>"
+    # Extract LogonType safely
+    $logonType = ($data | Where-Object { $_.Name -eq 'LogonType' }).'#text'
+    $targetUser = ($data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
+
+    # Only keep RDP logons (LogonType 10) for 4624
+   if ($eventId -eq 4624) {
+    if ($logonType -notin @('3','10')) { return }
+}
+	
+	if ($targetUser -like "*$") { return }
+
+    # Select correct IP field
+    $ipField = if ($eventId -eq 4624) { 'IpAddress' } else { 'ClientAddress' }
+
+    [PSCustomObject]@{
+        EventID         = $eventId
+        Type            = if ($eventId -eq 4624) { 'New Session' } else { 'Reconnect' }
+        Time            = Format-ForensicEventTime $_.TimeCreated
+        LogonUser       = $targetUser
+        LogonUserDomain = ($data | Where-Object { $_.Name -eq 'TargetDomainName' }).'#text'
+        LogonIP         = ($data | Where-Object { $_.Name -eq $ipField }).'#text'
+    }
 }
 
-# Populate the HTML table with process information
-foreach ($process in $RDPLogins) {
-  $RDPLoginsFragment += "<tr>"
-  $RDPLoginsFragment += "<td>$([DateTime]$process.Time)</td>"
-  $RDPLoginsFragment += "<td>$($process.LogonUser)</td>"
-  $RDPLoginsFragment += "<td>$($process.LogonUserDomain)</td>"
-  $RDPLoginsFragment += "<td>$($process.LogonIP)</td>"
-  $RDPLoginsFragment += "</tr>"
+# Build HTML
+$RDPLoginsFragment = ''
+
+if (!$RDPLogins) {
+    $RDPLoginsFragment = "<tr><td colspan='6' style='text-align:center;color:#27ae60;'>No RDP logins found</td></tr>"
+}
+else {
+    foreach ($process in $RDPLogins) {
+        $RDPLoginsFragment += "<tr>"
+        $RDPLoginsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.EventID))</td>"
+        $RDPLoginsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.Type))</td>"
+        $RDPLoginsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.Time))</td>"
+        $RDPLoginsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.LogonUser))</td>"
+        $RDPLoginsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.LogonUserDomain))</td>"
+        $RDPLoginsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$process.LogonIP))</td>"
+        $RDPLoginsFragment += "</tr>"
+    }
 }
 
 Write-ForensicLog "[!] Done" -Level SUCCESS -Section "EventLog"
@@ -3859,33 +3916,44 @@ Write-ForensicLog "[!] Done" -Level SUCCESS -Section "EventLog"
 
 Write-ForensicLog "[*] Fetching History of All RDP Logons to this system" -Level INFO -Section "EventLog"
 
-$RDPGroupID = @(
-  1149
-)
+$RDPAuthsFragment = ''
 
-$RDPAuths = Get-WinEvent -LogName 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational' -FilterXPath '<QueryList><Query Id="0"><Select>*[System[EventID=1149]]</Select></Query></QueryList>'
-[xml[]]$xml = $RDPAuths | ForEach-Object { $_.ToXml() }
-$EventData = Foreach ($event in $xml.Event) {
-  New-Object PSObject -Property @{
-    TimeCreated = (Get-Date ($event.System.TimeCreated.SystemTime) -Format 'yyyy-MM-dd hh:mm:ss K')
-    User        = $event.UserData.EventXML.Param1
-    Domain      = $event.UserData.EventXML.Param2
-    Client      = $event.UserData.EventXML.Param3
-  }
-} #$EventData | FT
+try {
+    $RDPAuths = Get-ForensicWinEvent -LogName 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational' -Id 1149
 
-if ($EventData.Count -eq 0) {
-    $RDPAuthsFragment += "<tr><td colspan='4' style='text-align:center;color:#27ae60;'>No RDP authentication events found</td></tr>"
-}
+    $EventData = foreach ($evt in $RDPAuths) {
+        $xml = ([xml]$evt.ToXml()).Event
+        $user   = $xml.UserData.EventXML.Param1
+        $domain = $xml.UserData.EventXML.Param2
+        $client = $xml.UserData.EventXML.Param3
 
-# Populate the HTML table with process information
-foreach ($process in $EventData) {
-  $RDPAuthsFragment += "<tr>"
-  $RDPAuthsFragment += "<td>$($process.TimeCreated)</td>"
-  $RDPAuthsFragment += "<td>$($process.User)</td>"
-  $RDPAuthsFragment += "<td>$($process.Domain)</td>"
-  $RDPAuthsFragment += "<td>$($process.Client)</td>"
-  $RDPAuthsFragment += "</tr>"
+        # Skip machine accounts and blank users — usually noise
+        if ([string]::IsNullOrWhiteSpace($user) -or $user -match '\$$') { continue }
+
+        [PSCustomObject]@{
+            TimeCreated = Format-ForensicEventTime $evt.TimeCreated
+            User        = $user
+            Domain      = $domain
+            Client      = $client
+        }
+    }
+
+    if (!$EventData -or $EventData.Count -eq 0) {
+        $RDPAuthsFragment = "<tr><td colspan='4' style='text-align:center;color:#27ae60;'>No RDP authentication events found</td></tr>"
+    } else {
+        foreach ($process in $EventData) {
+            $RDPAuthsFragment += "<tr>"
+            $RDPAuthsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($process.TimeCreated))</td>"
+            $RDPAuthsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($process.User))</td>"
+            $RDPAuthsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($process.Domain))</td>"
+            $RDPAuthsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($process.Client))</td>"
+            $RDPAuthsFragment += "</tr>"
+        }
+    }
+} catch {
+    # Log is disabled or RDP was never enabled on this machine
+    Write-ForensicLog "TerminalServices-RemoteConnectionManager log unavailable: $($_.Exception.Message)" -Level WARN -Section "EventLog"
+    #$RDPAuthsFragment = "<tr><td colspan='4' style='text-align:center;color:#e67e22;'>RDP operational log unavailable or empty</td></tr>"
 }
 
 
@@ -3900,20 +3968,20 @@ Write-ForensicLog "[*] Fetching All outgoing RDP connection History" -Level INFO
 
 # Define the properties array properly
 $properties = @(
-  @{n = 'TimeStamp'; e = { $_.TimeCreated } }
+  @{n = 'TimeStamp'; e = { Format-ForensicEventTime $_.TimeCreated } }
   @{n = 'LocalUser'; e = { [System.Security.Principal.SecurityIdentifier]::new($_.UserID).Translate([System.Security.Principal.NTAccount]).Value } }
   @{n = 'Target RDP host'; e = { $_.Properties[1].Value } }
 )
 
 # Retrieve the events
-$OutRDP = Get-WinEvent -FilterHashTable @{LogName = 'Microsoft-Windows-TerminalServices-RDPClient/Operational'; ID = '1102' } | Select-Object $properties
+$OutRDP = Get-ForensicWinEvent -LogName 'Microsoft-Windows-TerminalServices-RDPClient/Operational' -Id 1102 | Select-Object $properties
+
+# Initialize the HTML fragment
+$OutRDPFragment = ""
 
 if ($OutRDP.Count -eq 0) {
     $OutRDPFragment += "<tr><td colspan='3' style='text-align:center;color:#27ae60;'>No outgoing RDP connection events found</td></tr>"
 }
-
-# INFOialize the HTML fragment
-$OutRDPFragment = ""
 
 # Populate the HTML table with event information
 foreach ($event in $OutRDP) {
@@ -3938,15 +4006,14 @@ $CreatedUsersGroupID = @(
   4720
 )
 
-$CreatedUsersFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $CreatedUsersGroupID }
-$CreatedUsers = Get-WinEvent -FilterHashtable $CreatedUsersFilter | ForEach-Object {
+$CreatedUsers = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $CreatedUsersGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $CreatedUsersEventXml = ([xml]$_.ToXml()).Event
   $CreatedUser = ($CreatedUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
   $CreatedUsersTarget = ($CreatedUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time        = [DateTime]$CreatedUsersEventXml.System.TimeCreated.SystemTime
+    Time        = Format-ForensicEventTime $_.TimeCreated
     CreatedUser = $CreatedUser
     CreatedBy   = $CreatedUsersTarget
   }
@@ -3959,9 +4026,9 @@ if ($CreatedUsers.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $CreatedUsers) {
   $CreatedUsersFragment += "<tr>"
-  $CreatedUsersFragment += "<td>$([DateTime]$CreatedUsersEventXml.System.TimeCreated.SystemTime)</td>"
-  $CreatedUsersFragment += "<td>$($CreatedUser)</td>"
-  $CreatedUsersFragment += "<td>$($CreatedUsersTarget)</td>"  
+  $CreatedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $CreatedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.CreatedUser))</td>"
+  $CreatedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.CreatedBy))</td>"  
   $CreatedUsersFragment += "</tr>"
 }
 
@@ -3979,15 +4046,14 @@ $PassResetGroupID = @(
   4724
 )
 
-$PassResetFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $PassResetGroupID }
-$PassReset = Get-WinEvent -FilterHashtable $PassResetFilter | ForEach-Object {
+$PassReset = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $PassResetGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $PassResetEventXml = ([xml]$_.ToXml()).Event
   $PassResetTargetUser = ($PassResetEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
   $PassResetActionedBy = ($PassResetEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time       = [DateTime]$PassResetEventXml.System.TimeCreated.SystemTime
+    Time       = Format-ForensicEventTime $_.TimeCreated
     TargetUser = $PassResetTargetUser
     ActionedBy = $PassResetActionedBy
   }
@@ -4000,9 +4066,9 @@ if ($PassReset.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $PassReset) {
   $PassResetFragment += "<tr>"
-  $PassResetFragment += "<td>$([DateTime]$PassResetEventXml.System.TimeCreated.SystemTime)</td>"
-  $PassResetFragment += "<td>$($PassResetTargetUser)</td>"
-  $PassResetFragment += "<td>$($PassResetActionedBy)</td>"  
+  $PassResetFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $PassResetFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.TargetUser))</td>"
+  $PassResetFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.ActionedBy))</td>"  
   $PassResetFragment += "</tr>"
 }
 
@@ -4015,37 +4081,51 @@ Write-ForensicLog "[!] Done" -Level SUCCESS -Section "EventLog"
 
 Write-ForensicLog "[*] Checking for user, group, object access and credential manager actions" -Level INFO -Section "EventLog"
 
-$AddedUsersGroupID = @(
-  4732,
-  4728
-)
-$AddedUsersFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $AddedUsersGroupID }
-$AddedUsers = Get-WinEvent -FilterHashtable $AddedUsersFilter | ForEach-Object {
-  # convert the event to XML and grab the Event node
-  $AddedUsersEventXml = ([xml]$_.ToXml()).Event
-  $AddedUsersAddedBy = ($AddedUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
-  $AddedUsersTarget = ($AddedUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'MemberSid' }).'#text'
-  #SID CONVERSION
-  $AddedUsersGobjSID = New-Object System.Security.Principal.SecurityIdentifier($AddedUsersTarget)
-  $AddedUsersGobjUser = $AddedUsersGobjSID.Translate([System.Security.Principal.NTAccount])
-  # output the properties you need
-  [PSCustomObject]@{
-    Time    = [DateTime]$AddedUsersEventXml.System.TimeCreated.SystemTime
-    AddedBy = $AddedUsersAddedBy
-    Target  = $AddedUsersGobjUser
-  }
-} #| ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+$AddedUsersFragment = ''
 
-if ($AddedUsers.Count -eq 0) {
-    $AddedUsersFragment += "<tr><td colspan='3' style='text-align:center;color:#27ae60;'>No events of users being added to groups found</td></tr>"
-}
+try {
+    $AddedUsers = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id @(4728, 4732) | ForEach-Object {
 
-foreach ($event in $AddedUsers) {
-  $AddedUsersFragment += "<tr>"
-  $AddedUsersFragment += "<td>$([DateTime]$AddedUsersEventXml.System.TimeCreated.SystemTime)</td>"
-  $AddedUsersFragment += "<td>$($AddedUsersAddedBy)</td>"
-  $AddedUsersFragment += "<td>$($AddedUsersGobjUser)</td>"  
-  $AddedUsersFragment += "</tr>"
+        $xml     = ([xml]$_.ToXml()).Event
+        $addedBy = ($xml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
+        $group   = ($xml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName'  }).'#text'
+        $sid     = ($xml.EventData.Data | Where-Object { $_.Name -eq 'MemberSid'       }).'#text'
+
+        # Resolve SID to account name — gracefully fall back to raw SID
+        # if the account is deleted, from an unreachable domain, or a well-known built-in
+        $targetName = $sid  # default to raw SID
+        if (-not [string]::IsNullOrWhiteSpace($sid)) {
+            try {
+                $targetName = (New-Object System.Security.Principal.SecurityIdentifier($sid))
+                                .Translate([System.Security.Principal.NTAccount]).Value
+            } catch {
+                $targetName = "$sid (deleted/unknown account)"   # keep raw SID — don't crash
+            }
+        }
+
+        [PSCustomObject]@{
+            Time    = Format-ForensicEventTime $_.TimeCreated
+            AddedBy = $addedBy
+            Group   = $group
+            Target  = $targetName
+        }
+    }
+
+    if (-not $AddedUsers -or $AddedUsers.Count -eq 0) {
+        $AddedUsersFragment = "<tr><td colspan='4' style='text-align:center;color:#27ae60;'>No group membership change events found in the last $script:EventLogDaysBack days</td></tr>"
+    } else {
+        foreach ($event in $AddedUsers) {
+            $AddedUsersFragment += "<tr>"
+            $AddedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($event.Time))</td>"
+            $AddedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($event.AddedBy))</td>"
+            $AddedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($event.Group))</td>"
+            $AddedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode($event.Target))</td>"
+            $AddedUsersFragment += "</tr>"
+        }
+    }
+} catch {
+    Write-ForensicLog "Failed to query group membership events: $($_.Exception.Message)" -Level WARN -Section "EventLog"
+    $AddedUsersFragment = "<tr><td colspan='4' style='text-align:center;color:#e67e22;'>Could not retrieve group membership events</td></tr>"
 }
 
 Write-ForensicLog "[!] Done" -Level SUCCESS -Section "EventLog"
@@ -4060,15 +4140,14 @@ $EnabledUsersGroupID = @(
   4722
 
 )
-$EnabledUsersFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $EnabledUsersGroupID }
-$EnabledUsers = Get-WinEvent -FilterHashtable $EnabledUsersFilter | ForEach-Object {
+$EnabledUsers = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $EnabledUsersGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $EnabledUsersEventXml = ([xml]$_.ToXml()).Event
   $EnabledBy = ($EnabledUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   $EnabledTarget = ($EnabledUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time           = [DateTime]$EnabledUsersEventXml.System.TimeCreated.SystemTime
+    Time           = Format-ForensicEventTime $_.TimeCreated
     EnabledBy      = $EnabledBy
     EnabledAccount = $EnabledTarget
   }
@@ -4081,9 +4160,9 @@ if ($EnabledUsers.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $EnabledUsers) {
   $EnabledUsersFragment += "<tr>"
-  $EnabledUsersFragment += "<td>$([DateTime]$EnabledUsersEventXml.System.TimeCreated.SystemTime)</td>"
-  $EnabledUsersFragment += "<td>$($EnabledBy)</td>"
-  $EnabledUsersFragment += "<td>$($EnabledTarget)</td>"  
+  $EnabledUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $EnabledUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.EnabledBy))</td>"
+  $EnabledUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.EnabledAccount))</td>"  
   $EnabledUsersFragment += "</tr>"
 }
 
@@ -4099,15 +4178,14 @@ $DisabledUsersGroupID = @(
   4723
 
 )
-$DisabledUsersFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $DisabledUsersGroupID }
-$DisabledUsers = Get-WinEvent -FilterHashtable $DisabledUsersFilter | ForEach-Object {
+$DisabledUsers = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $DisabledUsersGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $DisabledUsersEventXml = ([xml]$_.ToXml()).Event
   $DisabledBy = ($DisabledUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   $DisabledTarget = ($DisabledUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time       = [DateTime]$DisabledUsersEventXml.System.TimeCreated.SystemTime
+    Time       = Format-ForensicEventTime $_.TimeCreated
     DisabledBy = $DisabledBy
     Disabled   = $DisabledTarget
   }
@@ -4120,9 +4198,9 @@ if ($DisabledUsers.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $DisabledUsers) {
   $DisabledUsersFragment += "<tr>"
-  $DisabledUsersFragment += "<td>$([DateTime]$DisabledUsersEventXml.System.TimeCreated.SystemTime)</td>"
-  $DisabledUsersFragment += "<td>$($DisabledBy)</td>"
-  $DisabledUsersFragment += "<td>$($DisabledTarget)</td>"  
+  $DisabledUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $DisabledUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.DisabledBy))</td>"
+  $DisabledUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Disabled))</td>"  
   $DisabledUsersFragment += "</tr>"
 }
 
@@ -4138,15 +4216,14 @@ $DeletedUsersGroupID = @(
   4726
 
 )
-$DeletedUsersFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $DeletedUsersGroupID }
-$DeletedUsers = Get-WinEvent -FilterHashtable $DeletedUsersFilter | ForEach-Object {
+$DeletedUsers = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $DeletedUsersGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $DeletedUsersEventXml = ([xml]$_.ToXml()).Event
   $DeletedBy = ($DeletedUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   $DeletedTarget = ($DeletedUsersEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time           = [DateTime]$DeletedUsersEventXml.System.TimeCreated.SystemTime
+    Time           = Format-ForensicEventTime $_.TimeCreated
     DeletedBy      = $DeletedBy
     DeletedAccount = $DeletedTarget
   }
@@ -4159,9 +4236,9 @@ if ($DeletedUsers.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $DeletedUsers) {
   $DeletedUsersFragment += "<tr>"
-  $DeletedUsersFragment += "<td>$([DateTime]$DeletedUsersEventXml.System.TimeCreated.SystemTime)</td>"
-  $DeletedUsersFragment += "<td>$($DeletedBy)</td>"
-  $DeletedUsersFragment += "<td>$($DeletedTarget)</td>"  
+  $DeletedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $DeletedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.DeletedBy))</td>"
+  $DeletedUsersFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.DeletedAccount))</td>"  
   $DeletedUsersFragment += "</tr>"
 }
 
@@ -4177,15 +4254,14 @@ $LockOutGroupID = @(
   4740
 
 )
-$LockOutFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $LockOutGroupID }
-$LockOut = Get-WinEvent -FilterHashtable $LockOutFilter | ForEach-Object {
+$LockOut = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $LockOutGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $LockOutEventXml = ([xml]$_.ToXml()).Event
   $LockedOutAcct = ($LockOutEventXml.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
   $System = ($LockOutEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time             = [DateTime]$LockOutEventXml.System.TimeCreated.SystemTime
+    Time             = Format-ForensicEventTime $_.TimeCreated
     LockedOutAccount = $LockedOutAcct
     System           = $System
   }
@@ -4198,9 +4274,9 @@ if ($LockOut.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $LockOut) {
   $LockOutFragment += "<tr>"
-  $LockOutFragment += "<td>$([DateTime]$LockOutEventXml.System.TimeCreated.SystemTime)</td>"
-  $LockOutFragment += "<td>$($LockedOutAcct)</td>"
-  $LockOutFragment += "<td>$($System)</td>"  
+  $LockOutFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $LockOutFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.LockedOutAccount))</td>"
+  $LockOutFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.System))</td>"  
   $LockOutFragment += "</tr>"
 }
 
@@ -4216,31 +4292,35 @@ $CredManBackupGroupID = @(
   5376
 
 )
-$CredManBackupFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $CredManBackupGroupID }
-$CredManBackup = Get-WinEvent -FilterHashtable $CredManBackupFilter | ForEach-Object {
+$CredManBackup = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $CredManBackupGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $CredManBackupEventXml = ([xml]$_.ToXml()).Event
   $CredManBackupAcct = ($CredManBackupEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   $CredManBackupAcctLogon = ($CredManBackupEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectLogonId' }).'#text'
+  $CredManBackupFileName = ($CredManBackupEventXml.EventData.Data | Where-Object { $_.Name -eq 'BackupFileName' }).'#text'
+  $CredManBackupProcessID = ($CredManBackupEventXml.EventData.Data | Where-Object { $_.Name -eq 'ClientProcessId' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time             = [DateTime]$CredManBackupEventXml.System.TimeCreated.SystemTime
+    Time             = Format-ForensicEventTime $_.TimeCreated
     BackupAccount    = $CredManBackupAcct
     AccountLogonType = $CredManBackupAcctLogon
-
+    BackupFileName   = $CredManBackupFileName
+    ProcessID        = $CredManBackupProcessID
   }
-}# | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+}
 
 if ($CredManBackup.Count -eq 0) {
-    $CredManBackupFragment += "<tr><td colspan='3' style='text-align:center;color:#27ae60;'>No credential manager backup events found</td></tr>"
+    $CredManBackupFragment += "<tr><td colspan='5' style='text-align:center;color:#27ae60;'>No credential manager backup events found</td></tr>"
 }
 
 # Populate the HTML table with event information
 foreach ($event in $CredManBackup) {
   $CredManBackupFragment += "<tr>"
-  $CredManBackupFragment += "<td>$([DateTime]$CredManBackupEventXml.System.TimeCreated.SystemTime)</td>"
-  $CredManBackupFragment += "<td>$($CredManBackupAcct)</td>"
-  $CredManBackupFragment += "<td>$($CredManBackupAcctLogon)</td>"  
+  $CredManBackupFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $CredManBackupFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.BackupAccount))</td>"
+  $CredManBackupFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.AccountLogonType))</td>"  
+  $CredManBackupFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.BackupFileName))</td>"
+  $CredManBackupFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.ProcessID))</td>"
   $CredManBackupFragment += "</tr>"
 }
 
@@ -4256,15 +4336,14 @@ $CredManRestoreGroupID = @(
   5377
 
 )
-$CredManRestoreFilter = @{LogName = 'Security'; ProviderName = 'Microsoft-Windows-Security-Auditing'; ID = $CredManRestoreGroupID }
-$CredManRestore = Get-WinEvent -FilterHashtable $CredManRestoreFilter | ForEach-Object {
+$CredManRestore = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $CredManRestoreGroupID | ForEach-Object {
   # convert the event to XML and grab the Event node
   $CredManRestoreEventXml = ([xml]$_.ToXml()).Event
   $RestoredAcct = ($CredManRestoreEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName' }).'#text'
   $CredManRestoreAcctLogon = ($CredManRestoreEventXml.EventData.Data | Where-Object { $_.Name -eq 'SubjectLogonId' }).'#text'
   # output the properties you need
   [PSCustomObject]@{
-    Time             = [DateTime]$CredManRestoreEventXml.System.TimeCreated.SystemTime
+    Time             = Format-ForensicEventTime $_.TimeCreated
     RestoredAccount  = $RestoredAcct
     AccountLogonType = $CredManRestoreAcctLogon
 
@@ -4278,9 +4357,9 @@ if ($CredManRestore.Count -eq 0) {
 # Populate the HTML table with event information
 foreach ($event in $CredManRestore) {
   $CredManRestoreFragment += "<tr>"
-  $CredManRestoreFragment += "<td>$([DateTime]$CredManRestoreEventXml.System.TimeCreated.SystemTime)</td>"
-  $CredManRestoreFragment += "<td>$($RestoredAcct)</td>"
-  $CredManRestoreFragment += "<td>$($CredManRestoreAcctLogon)</td>"  
+  $CredManRestoreFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $CredManRestoreFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.RestoredAccount))</td>"
+  $CredManRestoreFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.AccountLogonType))</td>"  
   $CredManRestoreFragment += "</tr>"
 }
 
@@ -4303,21 +4382,23 @@ $eventID = 4624
 #$eventID = 4625
 
 # Query the event log for logon events
-$logonEvents = Get-EventLog -LogName $logName -InstanceId $eventID -Newest 1000
+$logonEvents = Get-ForensicWinEvent -LogName $logName -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $eventID
 
 # Create an array to hold the logon event details
-$logonDetails = @()
-
-# Loop through each logon event and extract the relevant details
-foreach ($logonEvent in $logonEvents) {
-  $eventProperties = [ordered]@{
-    "Time"                   = $logonEvent.TimeGenerated
-    "User"                   = $logonEvent.ReplacementStrings[5]
-    "Logon Type"             = $logonEvent.ReplacementStrings[8]
-    "Source Network Address" = $logonEvent.ReplacementStrings[18]
-    "Status"                 = $logonEvent.ReplacementStrings[11]
+$logonDetails = foreach ($logonEvent in $logonEvents) {
+  $xml = ([xml]$logonEvent.ToXml()).Event
+  $data = @{}
+  foreach($node in @($xml.EventData.Data)){
+    if($node.Name){ $data[[string]$node.Name] = [string]$node.'#text' }
   }
-  $logonDetails += New-Object PSObject -Property $eventProperties
+
+  [PSCustomObject]@{
+    Time                 = Format-ForensicEventTime $logonEvent.TimeCreated
+    User                 = $data["TargetUserName"]
+    LogonType            = $data["LogonType"]
+    SourceNetworkAddress = $data["IpAddress"]
+    Status               = "Success"
+  }
 }
 
 # Convert the logon details to HTML
@@ -4328,13 +4409,13 @@ if ($logonDetails.Count -eq 0) {
 }
 
 # Populate the HTML table with event information
-foreach ($event in $logonEvents) {
+foreach ($event in $logonDetails) {
   $logonEventsFragment += "<tr>"
-  $logonEventsFragment += "<td>$($logonEvent.TimeGenerated)</td>"
-  $logonEventsFragment += "<td>$($logonEvent.ReplacementStrings[5])</td>"
-  $logonEventsFragment += "<td>$($logonEvent.ReplacementStrings[8])</td>"
-  $logonEventsFragment += "<td>$($logonEvent.ReplacementStrings[18])</td>"
-  $logonEventsFragment += "<td>$($logonEvent.ReplacementStrings[11])</td>"  
+  $logonEventsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $logonEventsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.User))</td>"
+  $logonEventsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.LogonType))</td>"
+  $logonEventsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.SourceNetworkAddress))</td>"
+  $logonEventsFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Status))</td>"  
   $logonEventsFragment += "</tr>"
 }
 
@@ -4359,7 +4440,7 @@ $eventID = 4625
 
     $Events = $null
     try{
-        $Events = $logonEventsFailed = Get-EventLog -LogName $logName -InstanceId $eventID -Newest 1000 -ErrorAction Stop
+        $Events = $logonEventsFailed = Get-ForensicWinEvent -LogName $logName -ProviderName 'Microsoft-Windows-Security-Auditing' -Id $eventID
         Write-ForensicLog "[*] Retrieved $($Events.Count) failed logon event(s)" -Level SUCCESS -Section "EventLog" -Detail "Failed Logon Retrieved $($Events.Count) events"
     }
     catch [System.Exception]{
@@ -4374,35 +4455,40 @@ $eventID = 4625
     }
 
 # Create an array to hold the logon event details
-$logonDetails = @()
-
-# Loop through each logon event and extract the relevant details
-foreach ($logonEvent in $logonEventsFailed) {
-  $eventProperties = [ordered]@{
-    "Time"                   = $logonEvent.TimeGenerated
-    "User"                   = $logonEvent.ReplacementStrings[5]
-    "Logon Type"             = $logonEvent.ReplacementStrings[8]
-    "Source Network Address" = $logonEvent.ReplacementStrings[18]
-    "Status"                 = $logonEvent.ReplacementStrings[11]
+$logonDetails = foreach ($logonEvent in $logonEventsFailed) {
+  $xml = ([xml]$logonEvent.ToXml()).Event
+  $data = @{}
+  foreach($node in @($xml.EventData.Data)){
+    if($node.Name){ $data[[string]$node.Name] = [string]$node.'#text' }
   }
-  $logonDetails += New-Object PSObject -Property $eventProperties
+
+  [PSCustomObject]@{
+    Time                 = Format-ForensicEventTime $logonEvent.TimeCreated
+    User                 = $data["TargetUserName"]
+    LogonType            = $data["LogonType"]
+    SourceNetworkAddress = $data["IpAddress"]
+    Status               = $data["Status"]
+  }
 }
 
 # Convert the logon details to HTML
 #$Failedhtml = $logonDetails | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
 
-<#if ($logonDetails.Count -eq 0) {
-    $logonEventsFailedFragment += "<tr><td colspan='5' style='text-align:center;color:#27ae60;'>No failed logon events found</td></tr>"
+
+
+if ($logonDetails.Count -eq 0 -and [string]::IsNullOrWhiteSpace($logonEventsFailedFragment)) {
+    $logonEventsFailedFragment += "<tr><td colspan='10' style='text-align:center;color:#27ae60;'>No failed logon events found</td></tr>"
 }
-#>
+
+
 # Populate the HTML table with event information
-foreach ($event in $logonEventsFailed) {
+foreach ($event in $logonDetails) {
   $logonEventsFailedFragment += "<tr>"
-  $logonEventsFailedFragment += "<td>$($logonEvent.TimeGenerated)</td>"
-  $logonEventsFailedFragment += "<td>$($logonEvent.ReplacementStrings[5])</td>"
-  $logonEventsFailedFragment += "<td>$($logonEvent.ReplacementStrings[8])</td>"
-  $logonEventsFailedFragment += "<td>$($logonEvent.ReplacementStrings[18])</td>"
-  $logonEventsFailedFragment += "<td>$($logonEvent.ReplacementStrings[11])</td>"  
+  $logonEventsFailedFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Time))</td>"
+  $logonEventsFailedFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.User))</td>"
+  $logonEventsFailedFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.LogonType))</td>"
+  $logonEventsFailedFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.SourceNetworkAddress))</td>"
+  $logonEventsFailedFragment += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$event.Status))</td>"  
   $logonEventsFailedFragment += "</tr>"
 }
 
@@ -4423,8 +4509,8 @@ Write-ForensicLog "[*] Checking for object access events" -Level INFO -Section "
 # Requires: Elevated privileges to read Security log
 # ---------------------------------------------------------
 
-$StartTime = (Get-Date).AddDays(-30)  # Sensible default — adjust as needed
-$EndTime   = Get-Date
+$StartTime = $script:EventLogStartTime
+$EndTime   = $script:EventLogEndTime
 $EventLog  = "Security"
 $EventIDs  = @(4656, 4663)
 
@@ -4473,7 +4559,7 @@ if($canReadLog){
     $Events = $null
     try{
         $Events = Get-WinEvent -FilterXml $Query -ErrorAction Stop
-        Write-ForensicLog -ForegroundColor DarkCyan "[*] Retrieved $($Events.Count) object access event(s)" -Level SUCCESS -Section "EventLog" -Detail "Object Access Retrieved $($Events.Count) events (FilterXml) in the last $((New-TimeSpan -Start $StartTime -End $EndTime).Days) days"
+        Write-ForensicLog "[*] Retrieved $($Events.Count) object access event(s)" -Level SUCCESS -Section "EventLog" -Detail "Object Access Retrieved $($Events.Count) events (FilterXml) in the last $((New-TimeSpan -Start $StartTime -End $EndTime).Days) days"
     }
     catch [System.Exception]{
         if($_.Exception.Message -match "No events were found"){
@@ -4535,7 +4621,7 @@ if($canReadLog){
 
         }
         catch{
-            Write-Verbose "[!] Failed to parse event $($Event.Id): $($_.Exception.Message)" -Level ERROR -Section "EventLog"
+            Write-ForensicLog "[!] Failed to parse event $($Event.Id): $($_.Exception.Message)" -Level ERROR -Section "EventLog"
         }
     }
 }
@@ -4553,88 +4639,97 @@ Write-ForensicLog "[!] Done" -Level SUCCESS -Section "EventLog"
 Write-ForensicLog "[*] Collecting process execution events" -Level INFO -Section "EventLog"
 
 # ---------------------------------------------------------
+# HELPER — convert hex PID strings (e.g. 0x66d4) to decimal
+# ---------------------------------------------------------
+function ConvertFrom-HexId {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    try { [Convert]::ToInt32($Value.Trim(), 16) } catch { $Value }
+}
+
+# ---------------------------------------------------------
 # SYSTEM ACCOUNTS TO SKIP (reduce noise)
 # ---------------------------------------------------------
-$systemAccounts = @('SYSTEM','LOCAL SERVICE','NETWORK SERVICE')
+$systemAccounts = @('SYSTEM', 'LOCAL SERVICE', 'NETWORK SERVICE')
 
 # ---------------------------------------------------------
 # QUERY (RESILIENT — handles malformed events)
 # ---------------------------------------------------------
-$startDate = (Get-Date).AddDays(-30)
-$endDate   = Get-Date
+$startDate = $script:EventLogStartTime
+$endDate   = $script:EventLogEndTime
 $events    = $null
 
-try{
-    $events = Get-WinEvent -FilterHashtable @{
-        LogName   = 'Security'
-        Id        = 4688,4689
-        StartTime = $startDate
-        EndTime   = $endDate
-    } -ErrorAction Stop
+try {
+    $events = Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id 4688 -StartTime $startDate -EndTime $endDate
 
-    Write-ForensicLog "[*] Retrieved $($events.Count) events (FilterHashtable)" -Level INFO -Section "EventLog" -Detail "Process Execution Retrieved $($events.Count) events (FilterHashtable)"
+    Write-ForensicLog "[*] Retrieved $($events.Count) events (FilterXml)" -Level INFO -Section "EventLog" -Detail "Process Execution Retrieved $($events.Count) events (FilterXml)"
 }
-catch{
+catch {
     Write-ForensicLog "[!] Filter failed — falling back to XPath" -Level WARN -Section "EventLog"
 
-    try{
-        $events = Get-WinEvent -LogName Security -FilterXPath "*[System[(EventID=4688 or EventID=4689)]]" |
-                  Where-Object {
-                      $_.TimeCreated -ge $startDate -and $_.TimeCreated -le $endDate
-                  }
+    try {
+        $fallbackStartUtc = $startDate.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+        $fallbackEndUtc   = $endDate.ToUniversalTime().ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+        $fallbackQuery = [xml]@"
+<QueryList>
+  <Query Id="0" Path="Security">
+    <Select Path="Security">*[System[(EventID=4688) and TimeCreated[@SystemTime&gt;='$fallbackStartUtc' and @SystemTime&lt;='$fallbackEndUtc']]]</Select>
+  </Query>
+</QueryList>
+"@
+        $events = Get-WinEvent -FilterXml $fallbackQuery -ErrorAction Stop
 
-        Write-ForensicLog "[*] Retrieved $($events.Count) events (XPath fallback)" -Level INFO -Section "EventLog" -Detail "Process Execution Retrieved $($events.Count) events (XPath fallback)"
+        Write-ForensicLog "[*] Retrieved $($events.Count) events (FilterXml fallback)" -Level INFO -Section "EventLog" -Detail "Process Execution Retrieved $($events.Count) events (FilterXml fallback)"
     }
-    catch{
+    catch {
         Write-ForensicLog "[!] Failed to query events: $($_.Exception.Message)" -Level ERROR -Section "EventLog"
     }
 }
 
-if(-not $events){
+if (-not $events) {
     Write-ForensicLog "[!] No events found" -Level WARN -Section "EventLog"
-    $ObjectHtmlTable2 += "<tr><td colspan='9' style='text-align:center;color:#27ae60;'>No process execution events found in the last $((New-TimeSpan -Start $startDate -End $endDate).Days) days</td></tr>"
+    $ObjectHtmlTable2 += "<tr><td colspan='8' style='text-align:center;color:#27ae60;'>No process execution events found in the last $((New-TimeSpan -Start $startDate -End $endDate).Days) days</td></tr>"
 }
-
 
 # ---------------------------------------------------------
 # PROCESS EVENTS
 # ---------------------------------------------------------
-foreach($event in $events){
-    try{
+foreach ($event in $events) {
+    try {
         $xml  = [xml]$event.ToXml()
         $data = @{}
 
-        foreach($node in $xml.Event.EventData.Data){
-            if($node.Name){ $data[$node.Name] = $node.'#text' }
+        foreach ($node in $xml.Event.EventData.Data) {
+            if ($node.Name) { $data[$node.Name] = $node.'#text' }
         }
 
         $user   = $data["SubjectUserName"]
         $domain = $data["SubjectDomainName"]
 
         # Skip system noise
-        if($systemAccounts -contains $user){ continue }
-        if($user -match '\$$'){ continue }
+        if ($systemAccounts -contains $user) { continue }
+        if ($user -match '\$$') { continue }
 
         $time        = $event.TimeCreated.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
         $processName = $data["NewProcessName"]
-        $processId   = $data["NewProcessId"]
+        $processId   = ConvertFrom-HexId $data["NewProcessId"]
         $parentName  = $data["ParentProcessName"]
-        $parentId    = $data["ProcessId"]
+        $parentId    = ConvertFrom-HexId $data["ProcessId"]
         $commandLine = $data["CommandLine"]
 
         $ObjectHtmlTable2 += "<tr>"
         $ObjectHtmlTable2 += "<td>$time</td>"
-        $ObjectHtmlTable2 += "<td>$user</td>"
-        $ObjectHtmlTable2 += "<td>$domain</td>"
-        $ObjectHtmlTable2 += "<td>$processName</td>"
-        $ObjectHtmlTable2 += "<td>$processId</td>"
-        $ObjectHtmlTable2 += "<td>$parentName</td>"
-        $ObjectHtmlTable2 += "<td>$parentId</td>"
-        $ObjectHtmlTable2 += "<td>$commandLine</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$user))</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$domain))</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$processName))</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$processId))</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$parentName))</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$parentId))</td>"
+        $ObjectHtmlTable2 += "<td>$([System.Net.WebUtility]::HtmlEncode([string]$commandLine))</td>"
         $ObjectHtmlTable2 += "</tr>"
     }
-    catch{
-        Write-Verbose "[!] Failed to parse event: $($_.Exception.Message)" -Level ERROR -Section "EventLog"
+    catch {
+        Write-ForensicLog "[!] Failed to parse event: $($_.Exception.Message)" -Level ERROR -Section "EventLog"
         continue
     }
 }
@@ -4727,7 +4822,7 @@ if($useBitLockerModule){
 
             $protectorType  = $protector.KeyProtectorType.ToString()
             $protectorId    = $protector.KeyProtectorId
-            $protectorLabel = $protectorTypeMap[$protectorType] ?? $protectorType
+            $protectorLabel = if($protectorTypeMap.ContainsKey($protectorType)){ $protectorTypeMap[$protectorType] } else { $protectorType }
 
             # Recovery password is the key material we care most about
             $keyMaterial = switch($protectorType){
@@ -4847,7 +4942,7 @@ else{
             }
         }
         catch{
-            Write-Verbose "[!] manage-bde failed on $drive — $($_.Exception.Message)" -Level ERROR -Section "BITLOCKER"
+            Write-ForensicLog "[!] manage-bde failed on $drive — $($_.Exception.Message)" -Level ERROR -Section "BITLOCKER"
         }
     }
 }
@@ -4933,7 +5028,7 @@ foreach($r in $BitLockerResults){
 #$BitLockerFragment
 
 $recoveryKeys = $BitLockerResults | Where-Object { $_.ProtectorType -match "Recovery Password" }
-Write-ForensicLog -ForegroundColor Cyan "[!] $($BitLockerResults.Count) BitLocker protector(s) found across $($BitLockerResults.MountPoint | Sort-Object -Unique | Measure-Object | Select-Object -ExpandProperty Count) volume(s)"
+Write-ForensicLog "[!] $($BitLockerResults.Count) BitLocker protector(s) found across $($BitLockerResults.MountPoint | Sort-Object -Unique | Measure-Object | Select-Object -ExpandProperty Count) volume(s)"
 if($recoveryKeys.Count -gt 0){
     Write-ForensicLog "[!] $($recoveryKeys.Count) recovery password(s) extracted — store securely" -Level SUCCESS -Section "BITLOCKER"
 } else {
@@ -4954,20 +5049,95 @@ Write-ForensicLog ""
 
 # ---------------------------------------------------------
 # SHIPPED SIGMA RUNTIME
-# End-user execution uses the precompiled JSON bundle and
-# shipped runtime only. Maintainer compilation happens in
-# tools\compile_sigma_bundle.py.
+# End-user execution uses the shipped runtime and the
+# structured JSON rules folder only.
 # ---------------------------------------------------------
-$sigmaBundlePath  = "$PSScriptRoot\Forensicator-Share\sigma-rules-precompiled.json"
+$sigmaRulesRoot   = "$PSScriptRoot\Forensicator-Share\rules"
 $sigmaRuntimePath = "$PSScriptRoot\Forensicator-Share\SigmaRuntime.ps1"
+$sigmaConfig      = $configData.sigma
+$sigmaDaysBack    = 30
+$sigmaMinLevel    = "medium"
+$sigmaEnableSysmon = $true
+$sigmaMaxEventsPerSource = 0
+$sigmaIncludeSourceIds = @()
+$sigmaExcludeSourceIds = @()
+$sigmaIncludeLogNames  = @()
+$sigmaExcludeLogNames  = @()
+$sigmaIncludeCategories = @()
+$sigmaExcludeCategories = @()
+
+if($null -ne $sigmaConfig){
+    if($null -ne $sigmaConfig.days_back){
+        $parsedSigmaDaysBack = 0
+        if([int]::TryParse([string]$sigmaConfig.days_back, [ref]$parsedSigmaDaysBack) -and $parsedSigmaDaysBack -gt 0){
+            $sigmaDaysBack = $parsedSigmaDaysBack
+        }
+        else{
+            Write-ForensicLog "Invalid sigma.days_back in config.json — using default" -Level WARN -Section "SIGMA" -Detail "Configured value: $($sigmaConfig.days_back) | Default: 30"
+        }
+    }
+
+    if($null -ne $sigmaConfig.min_level){
+        $configuredMinLevel = [string]$sigmaConfig.min_level
+        if(@("critical","high","medium","low","informational") -contains $configuredMinLevel){
+            $sigmaMinLevel = $configuredMinLevel
+        }
+        else{
+            Write-ForensicLog "Invalid sigma.min_level in config.json — using default" -Level WARN -Section "SIGMA" -Detail "Configured value: $configuredMinLevel | Default: medium"
+        }
+    }
+
+    if($null -ne $sigmaConfig.enable_sysmon){
+        $sigmaEnableSysmon = [bool]$sigmaConfig.enable_sysmon
+    }
+
+    if($null -ne $sigmaConfig.max_events_per_source){
+        $parsedSigmaMaxEvents = 0
+        if([int]::TryParse([string]$sigmaConfig.max_events_per_source, [ref]$parsedSigmaMaxEvents) -and $parsedSigmaMaxEvents -ge 0){
+            $sigmaMaxEventsPerSource = $parsedSigmaMaxEvents
+        }
+        else{
+            Write-ForensicLog "Invalid sigma.max_events_per_source in config.json — using unbounded scan" -Level WARN -Section "SIGMA" -Detail "Configured value: $($sigmaConfig.max_events_per_source)"
+        }
+    }
+
+    $sigmaIncludeSourceIds  = ConvertTo-ConfigStringArray $sigmaConfig.include_source_ids
+    $sigmaExcludeSourceIds  = ConvertTo-ConfigStringArray $sigmaConfig.exclude_source_ids
+    $sigmaIncludeLogNames   = ConvertTo-ConfigStringArray $sigmaConfig.include_log_names
+    $sigmaExcludeLogNames   = ConvertTo-ConfigStringArray $sigmaConfig.exclude_log_names
+    $sigmaIncludeCategories = ConvertTo-ConfigStringArray $sigmaConfig.include_categories
+    $sigmaExcludeCategories = ConvertTo-ConfigStringArray $sigmaConfig.exclude_categories
+}
+
+if(-not $sigmaEnableSysmon){
+    $sigmaExcludeLogNames = @(
+        $sigmaExcludeLogNames +
+        @("Microsoft-Windows-Sysmon/Operational")
+    ) | Select-Object -Unique
+}
+
 Write-ForensicLog "Initialising Sigma detection engine" -Level INFO -Section "SIGMA"
+$sigmaMaxEventsLabel = if($sigmaMaxEventsPerSource -gt 0){ [string]$sigmaMaxEventsPerSource } else { "unbounded" }
+Write-ForensicLog "Sigma configuration resolved" -Level INFO -Section "SIGMA" -Detail "DaysBack: $sigmaDaysBack | MinLevel: $sigmaMinLevel | SysmonEnabled: $sigmaEnableSysmon | MaxEventsPerSource: $sigmaMaxEventsLabel"
 
 if(Test-Path $sigmaRuntimePath){
-    # Use the shipped precompiled runtime instead of the legacy in-file parser above.
+    # Use the shipped runtime and structured rule set instead of the legacy in-file parser above.
     . $sigmaRuntimePath
-    $sigmaFindings = Invoke-SigmaScan -BundlePath $sigmaBundlePath `
-                                       -DaysBack  30 `
-                                       -MinLevel  "medium"
+    $sigmaScanParams = @{
+        RulesRoot = $sigmaRulesRoot
+        DaysBack  = $sigmaDaysBack
+        MinLevel  = $sigmaMinLevel
+        MaxEventsPerSource = $sigmaMaxEventsPerSource
+    }
+
+    if($sigmaIncludeSourceIds.Count -gt 0){ $sigmaScanParams.IncludeSourceIds = $sigmaIncludeSourceIds }
+    if($sigmaExcludeSourceIds.Count -gt 0){ $sigmaScanParams.ExcludeSourceIds = $sigmaExcludeSourceIds }
+    if($sigmaIncludeLogNames.Count  -gt 0){ $sigmaScanParams.IncludeLogNames  = $sigmaIncludeLogNames }
+    if($sigmaExcludeLogNames.Count  -gt 0){ $sigmaScanParams.ExcludeLogNames  = $sigmaExcludeLogNames }
+    if($sigmaIncludeCategories.Count -gt 0){ $sigmaScanParams.IncludeCategories = $sigmaIncludeCategories }
+    if($sigmaExcludeCategories.Count -gt 0){ $sigmaScanParams.ExcludeCategories = $sigmaExcludeCategories }
+
+    $sigmaFindings = Invoke-SigmaScan @sigmaScanParams
 }
 else{
     Write-ForensicLog "Sigma runtime file missing — skipping detection" -Level ERROR -Section "SIGMA" -Detail "Expected runtime at $sigmaRuntimePath"
@@ -4975,42 +5145,36 @@ else{
 }
 
 # ---------------------------------------------------------
-# HTML OUTPUT
+# SIGMA DATA — serialised as inline JSON for Discover page
 # ---------------------------------------------------------
-
-
-$levelColors = @{
-    "critical"      = "#ff4444"
-    "high"          = "#ffcccc"
-    "medium"        = "#ffddcc"
-    "low"           = "#fff3cc"
-    "informational" = "#f0f0f0"
-}
-
+$sigmaJsonData = '[]'
+$script:SigmaOverviewRows = ''
+$script:SigmaDetectionRows = ''
 if($sigmaFindings.Count -gt 0){
-    foreach($f in $sigmaFindings | Sort-Object { 
+    $orderedFindings = $sigmaFindings | Sort-Object {
         switch($_.RuleLevel){
             "critical"{"0"} "high"{"1"} "medium"{"2"} "low"{"3"} default{"4"}
         }
-    }){
-        $color    = $levelColors[$f.RuleLevel] ?? "#ffffff"
-        $cmdShort = if($f.CommandLine.Length -gt 200){ 
-                        $f.CommandLine.Substring(0,200) + "..." 
-                    } else { 
-                        $f.CommandLine 
-                    }
+    }
 
-        $SigmaFragment += "<tr style='background-color:$color;'>"
-        $SigmaFragment += "<td>$($f.TimeCreated)</td>"
-        $SigmaFragment += "<td><strong>$($f.RuleTitle)</strong></td>"
-        $SigmaFragment += "<td>$($f.RuleLevel.ToUpper())</td>"
-        $SigmaFragment += "<td>$($f.RuleTags)</td>"
-        $SigmaFragment += "<td>$($f.EventId)</td>"
-        $SigmaFragment += "<td>$($f.User)</td>"
-        $SigmaFragment += "<td>$($f.Process)</td>"
-        $SigmaFragment += "<td><code>$cmdShort</code></td>"
-        $SigmaFragment += "<td>$($f.RuleFile)</td>"
-        $SigmaFragment += "</tr>"
+  $toSigmaRow = {
+    param($finding)
+    $timeCreated = [System.Net.WebUtility]::HtmlEncode([string]($finding.TimeCreated))
+    $ruleLevel   = [System.Net.WebUtility]::HtmlEncode([string]($finding.RuleLevel))
+    $ruleTitle   = [System.Net.WebUtility]::HtmlEncode([string]($finding.RuleTitle))
+    $eventId     = [System.Net.WebUtility]::HtmlEncode([string]($finding.EventId))
+    $userName    = [System.Net.WebUtility]::HtmlEncode([string]($finding.User))
+    $processName = [System.Net.WebUtility]::HtmlEncode([string]($finding.Process))
+    "<tr><td></td><td>$timeCreated</td><td>$ruleLevel</td><td>$ruleTitle</td><td>$eventId</td><td>$userName</td><td>$processName</td></tr>"
+  }
+
+  $script:SigmaDetectionRows = (($orderedFindings | ForEach-Object { & $toSigmaRow $_ }) -join "`n")
+  $script:SigmaOverviewRows  = (($orderedFindings | Select-Object -First 12 | ForEach-Object { & $toSigmaRow $_ }) -join "`n")
+
+    $sigmaJsonData = ($orderedFindings | ConvertTo-Json -Depth 3 -Compress)
+    # Always wrap as array even for single finding
+    if($sigmaJsonData -notmatch '^\['){
+        $sigmaJsonData = "[$sigmaJsonData]"
     }
 
     # Export findings for external analysis
@@ -5018,10 +5182,42 @@ if($sigmaFindings.Count -gt 0){
         "$PSScriptRoot\$env:COMPUTERNAME\SigmaFindings.csv" `
         -NoTypeInformation -Encoding UTF8
 }
-else{
-    $SigmaFragment += "<tr><td colspan='9' style='text-align:center;color:#27ae60;'>No Sigma rule matches found</td></tr>"
-}
+# HTML-safe: prevent </script> in command lines from breaking the page
+$script:sigmaJsonSafe = $sigmaJsonData -replace '</', '\/'
 
+# ── HASH_DATA ── map $hashMatches into the same schema JS expects
+$hashJsonData = if ($hashMatches -and $hashMatches.Count -gt 0) {
+    $hashMatches | ForEach-Object {
+        [PSCustomObject]@{
+            RuleTitle   = "Hash Match: $($_.DetectedFile)"
+            RuleLevel   = "high"
+            TimeCreated = "$($_.LastModified)"
+            User        = "$($_.Owner)"
+            Process     = "$($_.DetectedFile)"
+            CommandLine = "MD5=$($_.MD5) | SHA256=$($_.SHA256)"
+            RuleFile    = "$($_.Extension)"
+        }
+    } | ConvertTo-Json -Depth 2 -Compress
+} else { '[]' }
+if ($hashJsonData -notmatch '^\[') { $hashJsonData = "[$hashJsonData]" }
+$script:hashJsonSafe = $hashJsonData -replace '</', '\/'
+
+# ── IOC_DATA ── malicious browser URLs collected during history scan
+$iocJsonData = if ($script:IocHits -and $script:IocHits.Count -gt 0) {
+    $script:IocHits | ForEach-Object {
+        [PSCustomObject]@{
+            RuleTitle   = "Malicious URL"
+            RuleLevel   = "high"
+            TimeCreated = "$($_.LastVisit)"
+            User        = "$($_.User)"
+            Process     = "$($_.Browser)"
+            CommandLine = "$($_.URL)"
+            RuleFile    = "$($_.Profile)"
+        }
+    } | ConvertTo-Json -Depth 2 -Compress
+} else { '[]' }
+if ($iocJsonData -notmatch '^\[') { $iocJsonData = "[$iocJsonData]" }
+$script:iocJsonSafe = $iocJsonData -replace '</', '\/'
 
 Write-ForensicLog "Sigma scan complete — $($sigmaFindings.Count) finding(s)" `
                   -Level $(if($sigmaFindings.Count -gt 0){ "FINDING" } else { "SUCCESS" }) `
@@ -5030,6 +5226,9 @@ Write-ForensicLog "Sigma scan complete — $($sigmaFindings.Count) finding(s)" `
 #endregion
 
 Write-ForensicLog ""
+
+
+
 
 ###########################################################################################################
 ###########################################################################################################
@@ -5040,493 +5239,8 @@ Write-ForensicLog ""
 #Write-ForensicLog -Fore DarkCyan "[!] Hang on, the Forensicator is compiling your results"
 
 
+<#
 
-$Global:Style_Head = @"
-
-<!DOCTYPE html>
-<html>
-<head>
-<!-- Basic Page Info -->
-<meta charset="utf-8" />
-<title>Live Forensicator - Results for $env:computername</title>
-
-<!-- Mobile Specific Metas -->
-<meta name="viewport" content="width=device-width, INFOial-scale=1, maximum-scale=1" />
-<!-- Google Font -->
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
-rel="stylesheet" />
-<!-- CSS -->
-<link rel="stylesheet" type="text/css"
-href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/core.css"
-onerror="this.onerror=null;this.href='../../styles/vendors/styles/core.css';" />
-<link rel="stylesheet" type="text/css"
-href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/icon-font.min.css"
-onerror="this.onerror=null;this.href='../../styles/vendors/styles/icon-font.min.css';" />
-<link rel="stylesheet" type="text/css"
-href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css"
-onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/dataTables.bootstrap4.min.css';" />
-<link rel="stylesheet" type="text/css"
-href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/css/responsive.bootstrap4.min.css"
-onerror="this.onerror=null;this.href='../../styles/src/plugins/datatables/css/responsive.bootstrap4.min.css';" />
-
-<link rel="stylesheet" type="text/css"
-href="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/styles/style.css"
-onerror="this.onerror=null;this.href='../../styles/vendors/styles/style.css';" />
-
-$FI_Styles
-
-</head>
-<body>
-<div class="pre-loader">
-<div class="pre-loader-box">
-<div class="loader-logo">
-<img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" />
-</div>
-<div class="loader-progress" id="progress_div">
-<div class="bar" id="bar1"></div>
-</div>
-<div class="percent" id="percent1">0%</div>
-<div class="loading-text">Loading...</div>
-</div>
-</div>
-<div class="header">
-<div class="header-left">
-<div class="menu-icon bi bi-list"></div>
-<div class="search-toggle-icon bi bi-search" data-toggle="header_search"></div>
-<div class="header-search">
-<form>
-<div class="form-group mb-0">
-<i class="dw dw-search2 search-icon"></i>
-<input type="text" class="form-control search-input" placeholder="Search Here" />
-<div class="dropdown">
-<a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-<i class="ion-arrow-down-c"></i>
-</a>
-<div class="dropdown-menu dropdown-menu-right">
-<div class="form-group row">
-<label class="col-sm-12 col-md-2 col-form-label">From</label>
-<div class="col-sm-12 col-md-10">
-<input class="form-control form-control-sm form-control-line" type="text" />
-</div>
-</div>
-<div class="form-group row">
-<label class="col-sm-12 col-md-2 col-form-label">To</label>
-<div class="col-sm-12 col-md-10">
-<input class="form-control form-control-sm form-control-line" type="text" />
-</div>
-</div>
-<div class="form-group row">
-<label class="col-sm-12 col-md-2 col-form-label">Subject</label>
-<div class="col-sm-12 col-md-10">
-<input class="form-control form-control-sm form-control-line" type="text" />
-</div>
-</div>
-<div class="text-right">
-<button class="btn btn-primary">Search</button>
-</div>
-</div>
-</div>
-</div>
-</form>
-</div>
-</div>
-<div class="header-right">
-<div class="user-info-dropdown">
-<div class="dropdown">
-<a class="dropdown-toggle no-arrow" href="#" role="button" data-toggle="dropdown">
-<span class="bi bi-laptop" style="font-size: 1.50em;">
-</span>
-<span class="user-name">$env:computername</span>
-</a>
-</div>
-</div>
-<div class="github-link">
-<a href="https://github.com/Johnng007/Live-Forensicator" target="_blank"><img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/github.svg"
-alt="" /></a>
-</div>
-</div>
-</div>
-<div class="right-sidebar">
-<div class="right-sidebar-body customscroll">
-<div class="right-sidebar-body-content">
-<h4 class="weight-600 font-18 pb-10">Header Background</h4>
-<div class="sidebar-btn-group pb-30 mb-10">
-<a href="javascript:void(0);" class="btn btn-outline-primary header-white active">White</a>
-<a href="javascript:void(0);" class="btn btn-outline-primary header-dark">Dark</a>
-</div>
-<h4 class="weight-600 font-18 pb-10">Sidebar Background</h4>
-<div class="sidebar-btn-group pb-30 mb-10">
-<a href="javascript:void(0);" class="btn btn-outline-primary sidebar-light active">White</a>
-<a href="javascript:void(0);" class="btn btn-outline-primary sidebar-dark">Dark</a>
-</div>
-</div>
-</div>
-</div>
-
-
-"@
-
-
-$Global:Style_Menu = @"
-
-<div class="left-side-bar header-white active">
-<div class="brand-logo">
-<a href="index.html">
-<img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" class="dark-logo" />
-<img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" class="light-logo" />
-</a>
-<div class="close-sidebar" data-toggle="left-sidebar-close">
-<i class="ion-close-round"></i>
-</div>
-</div>
-<div class="menu-block customscroll">
-<div class="sidebar-menu">
-<ul id="accordion-menu">
-<li class="dropdown">
-<a href="index.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-house"></span><span class="mtext">Home</span>
-</a>
-</li>
-<li class="dropdown">
-<a href="users.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-</a>
-</li>
-<li class="dropdown">
-<a href="system.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-</a>
-</li>
-<li class="dropdown">
-<a href="network.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-</a>
-</li>
-<li class="dropdown">
-<a href="processes.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-</a>
-</li>
-<li class="dropdown">
-<a href="others.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-</a>
-</li>
-
-<li class="dropdown">
-<a href="javascript:;" class="dropdown-toggle">
-<span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-</a>
-<ul class="submenu">
-<li><a href="evtx_user.html">User Actions</a></li>
-<li>
-<a href="evtx_logons.html">Logon Events</a>
-</li>
-<li><a href="evtx_object.html">Object Access</a></li>
-<li><a href="evtx_process.html">Process Execution</a></li>
-</ul>
-</li>
-<li class="dropdown">
-<a href="detection.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Detections</span>
-</a>
-</li>
-<li>
-<div class="dropdown-divider"></div>
-</li>
-<li>
-<div class="sidebar-small-cap">Extra</div>
-</li>
-<li class="dropdown">
-<a href="extras.html" class="dropdown-toggle no-arrow">
-<span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-</a>
-</li>
-</ul>
-</div>
-</div>
-</div>
-
-
-"@
-
-
-$Global:Style_Footer = @"
-
-<div class="footer-wrap pd-20 mb-20 card-box">
-Live Forensicator - Coded By
-<a href="https://github.com/Johnng007/Live-Forensicator" target="_blank">The Black Widow</a>
-</div>
-</div>
-</div>
-<!-- js -->
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/core.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/core.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/script.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/script.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/process.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/process.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/layout-settings.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/layout-settings.js"><\/script>')</script>
-<script type="text/javascript"
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/jquery.dataTables.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/jquery.dataTables.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.bootstrap4.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.responsive.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.responsive.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/responsive.bootstrap4.min.js"><\/script>')</script>
-<!-- buttons for Export datatable -->
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/dataTables.buttons.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatables/js/dataTables.buttons.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.bootstrap4.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.bootstrap4.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.print.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.print.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.html5.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.html5.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/buttons.flash.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/buttons.flash.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/pdfmake.min.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/pdfmake.min.js"><\/script>')</script>
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/src/plugins/datatables/js/vfs_fonts.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/src/plugins/datatabgles/js/vfs_fonts.js"><\/script>')</script>
-<!-- Datatable Setting js -->
-<script
-src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/scripts/datatable-setting.js"></script>
-<script>window.jQuery || document.write('<script src="../../styles/vendors/scripts/datatable-setting.js"><\/script>')</script>
-
-$FI_Panel
-$FI_Scripts
-
-</body>
-</html>
-
-"@
-
-
-
-# ================================
-# FORSENICATOR UI COMPONENTS
-# ================================
-
-# ---- STYLES ----
-$Global:FI_Styles = @"
-<style>
-.fi-panel {
-  position: fixed;
-  top: 0;
-  right: -560px;
-  width: 560px;
-  height: 100%;
-  background: #0f172a;
-  box-shadow: -4px 0 20px rgba(0,0,0,0.4);
-  transition: right 0.3s ease;
-  z-index: 9999;
-  display: flex;
-  flex-direction: column;
-}
-.fi-panel.open { right: 0; }
-
-.fi-panel-header {
-  padding: 12px;
-  background: #020617;
-  color: #fff;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-weight: 600;
-}
-
-.fi-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px 0;
-  background: #0f172a;
-  border-bottom: 1px solid rgba(148,163,184,0.2);
-}
-
-.fi-tabs:empty {
-  display: none;
-}
-
-.fi-tab {
-  border: 1px solid rgba(148,163,184,0.25);
-  background: transparent;
-  color: #cbd5e1;
-  border-radius: 999px;
-  padding: 7px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.fi-tab:hover,
-.fi-tab.active {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-  color: #fff;
-}
-
-.fi-close {
-  background: none;
-  border: none;
-  color: #aaa;
-  font-size: 16px;
-  cursor: pointer;
-}
-
-.fi-content {
-  padding: 16px;
-  overflow-y: auto;
-  color: #e5e7eb;
-  font-size: 13px;
-}
-
-.fi-tab-panel {
-  display: none;
-}
-
-.fi-tab-panel.active {
-  display: block;
-}
-
-.fi-block { margin-bottom: 18px; }
-
-.fi-block-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 6px;
-}
-
-.fi-block h3 {
-  font-size: 12px;
-  text-transform: uppercase;
-  color: #94a3b8;
-  margin-bottom: 0;
-}
-
-.fi-block p {
-  margin: 0;
-  line-height: 1.6;
-}
-
-.fi-block ul { padding-left: 18px; }
-
-.fi-block li { margin-bottom: 6px; }
-
-.fi-block code {
-  color: #bfdbfe;
-  background: rgba(30,41,59,0.9);
-  padding: 1px 5px;
-  border-radius: 4px;
-}
-
-.fi-code {
-  margin: 0;
-  padding: 12px;
-  border: 1px solid rgba(148,163,184,0.2);
-  border-radius: 10px;
-  background: rgba(2,6,23,0.92);
-  overflow-x: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.fi-code code {
-  display: block;
-  padding: 0;
-  border-radius: 0;
-  background: transparent;
-  color: #e2e8f0;
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.fi-copy-btn {
-  border: 1px solid rgba(148,163,184,0.25);
-  border-radius: 999px;
-  background: transparent;
-  color: #cbd5e1;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 5px 10px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.fi-copy-btn:hover,
-.fi-copy-btn.copied {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-  color: #fff;
-}
-
-.fi-message {
-  color: #cbd5e1;
-  line-height: 1.6;
-}
-
-.fd-info-trigger {
-  position: relative;
-  cursor: pointer;
-  color: #aaa;
-  margin-left: 8px;
-}
-
-.fd-info-trigger:hover { color: #fff; }
-
-/* Tooltip */
-.fd-info-trigger::after {
-  content: attr(data-tooltip);
-  position: absolute;
-  bottom: 140%;
-  right: 0;
-  background: #111;
-  color: #fff;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 11px;
-  opacity: 0;
-  transition: 0.2s;
-  white-space: nowrap;
-}
-
-.fd-info-trigger:hover::after {
-  opacity: 1;
-}
-</style>
-"@
-
-# ---- PANEL HTML ----
-$Global:FI_Panel = @"
-<div id="fi-panel" class="fi-panel">
-  <div class="fi-panel-header">
-    <span id="fi-panel-title">Detection Details</span>
-    <button type="button" class="fi-close" onclick="closePanel()">✕</button>
-  </div>
-  <div id="fi-panel-tabs" class="fi-tabs"></div>
-  <div id="fi-panel-content" class="fi-content"></div>
-</div>
-"@
 
 function Get-ForensicatorDetectionCommandsMap {
   return [ordered]@{
@@ -5631,33 +5345,23 @@ Get-BitLockerVolume -ErrorAction SilentlyContinue
 manage-bde -protectors -get $drive
 manage-bde -status $drive
 '@
-    'LOCAL_GROUP_MEMBERSHIP' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4798, 4799) }'
-    'RDP_LOGIN_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4624, 4778) } | Where-Object { $_.Properties[8].Value -eq 10 }'
-    'ALL_RDP_LOGIN_HISTORY' = 'Get-WinEvent -LogName ''Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'' -FilterXPath ''<QueryList><Query Id="0"><Select>*[System[EventID=1149]]</Select></Query></QueryList>'''
-    'ALL_OUTGOING_RDP_CONNECTION_HISTORY' = 'Get-WinEvent -FilterHashTable @{ LogName = ''Microsoft-Windows-TerminalServices-RDPClient/Operational''; ID = ''1102'' } | Select-Object $properties'
-    'USER_CREATION_ACTIVITY' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4720) }'
-    'PASSWORD_RESET_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4724) }'
-    'USERS_ADDED_TO_GROUP' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4732, 4728) }'
-    'USER_ENABLING_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4722) }'
-    'USER_DISABLING_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4723) }'
-    'USER_DELETION_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4726) }'
-    'USER_LOCKOUT_ACTIVITIES' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(4740) }'
-    'CREDMAN_BACKUP_ACTIVITY' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(5376) }'
-    'CREDMAN_RESTORE_ACTIVITY' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; ProviderName = ''Microsoft-Windows-Security-Auditing''; ID = @(5377) }'
-    'SUCCESSFUL_LOGON_EVENTS' = 'Get-EventLog -LogName Security -InstanceId 4624 -Newest 1000'
-    'FAILED_LOGON_EVENTS' = 'Get-EventLog -LogName Security -InstanceId 4625 -Newest 1000'
-    'OBJECT_ACCESS_EVENTS' = @'
-$Query = @"
-<QueryList>
-  <Query Path="Security">
-    <Select Path="Security">*[System[(EventID=4656 or EventID=4663)]]</Select>
-  </Query>
-</QueryList>
-"@
-
-Get-WinEvent -FilterXml $Query -ErrorAction Stop
-'@
-    'PROCESS_EXECUTION_EVENTS' = 'Get-WinEvent -FilterHashtable @{ LogName = ''Security''; Id = 4688, 4689; StartTime = $startDate; EndTime = $endDate } -ErrorAction Stop'
+    'LOCAL_GROUP_MEMBERSHIP' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id @(4798, 4799)'
+    'RDP_LOGIN_ACTIVITIES' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id @(4624, 4778)'
+    'ALL_RDP_LOGIN_HISTORY' = 'Get-ForensicWinEvent -LogName ''Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'' -Id 1149'
+    'ALL_OUTGOING_RDP_CONNECTION_HISTORY' = 'Get-ForensicWinEvent -LogName ''Microsoft-Windows-TerminalServices-RDPClient/Operational'' -Id 1102 | Select-Object $properties'
+    'USER_CREATION_ACTIVITY' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4720'
+    'PASSWORD_RESET_ACTIVITIES' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4724'
+    'USERS_ADDED_TO_GROUP' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id @(4732, 4728)'
+    'USER_ENABLING_ACTIVITIES' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4722'
+    'USER_DISABLING_ACTIVITIES' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4723'
+    'USER_DELETION_ACTIVITIES' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4726'
+    'USER_LOCKOUT_ACTIVITIES' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4740'
+    'CREDMAN_BACKUP_ACTIVITY' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 5376'
+    'CREDMAN_RESTORE_ACTIVITY' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 5377'
+    'SUCCESSFUL_LOGON_EVENTS' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4624'
+    'FAILED_LOGON_EVENTS' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4625'
+    'OBJECT_ACCESS_EVENTS' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id @(4656, 4663)'
+    'PROCESS_EXECUTION_EVENTS' = 'Get-ForensicWinEvent -LogName ''Security'' -ProviderName ''Microsoft-Windows-Security-Auditing'' -Id 4688'
     'RANSOMWARE_NOTES' = 'Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object { $ransomNoteSet.Contains($_.Name) }'
     'RANSOMWARE_EXTENSION' = 'Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue | Where-Object { $ransomExtensionSet.Count -gt 0 -and $ransomExtensionSet.Contains($_.Extension.ToLower()) }'
     'HIGH_ENTROPY_FILES' = @'
@@ -5666,12 +5370,12 @@ Get-ChildItem $scanPath -Recurse -File -Force -ErrorAction SilentlyContinue |
     ForEach-Object { Get-FileEntropy $_.FullName $_.Length }
 '@
     'SHADOW_COPY_DELETION' = @'
-Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4688; StartTime = (Get-Date).AddDays(-7) }
-Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-PowerShell/Operational'; Id = 4104; StartTime = (Get-Date).AddDays(-7) }
+Get-ForensicWinEvent -LogName 'Security' -ProviderName 'Microsoft-Windows-Security-Auditing' -Id 4688
+Get-ForensicWinEvent -LogName 'Microsoft-Windows-PowerShell/Operational' -Id 4104
 & bcdedit /enum {current}
 Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'vssadmin.*delete|wmic.*shadowcopy.*delete|wbadmin.*delete|diskshadow' }
 '@
-    'SIGMA_RULES' = 'Invoke-SigmaScan -BundlePath $sigmaBundlePath -DaysBack 30 -MinLevel "medium"'
+    'SIGMA_RULES' = 'Invoke-SigmaScan @sigmaScanParams'
   }
 }
 
@@ -5683,113 +5387,257 @@ $Global:FI_Scripts = @'
 
 const ForensicatorDocs = {
 
-  "CURRENT_USER_INFORMATION": {
+  "LOCAL_USER_ACCOUNTS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "Current User Information"
+    "title": "Local User Accounts"
   },
-  "SYSTEM_DETAILS": {
+  "ADMIN_GROUP_MEMBERS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "System Details"
+    "title": "Administrative Group Members"
   },
-  "LOGON_SESSIONS": {
+  "ACTIVE_LOGON_SESSIONS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "Logon Sessions"
+    "title": "Active Logon Sessions"
   },
-  "USER_PROCESSES": {
+  "USERS_GROUPS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "User Processes"
+    "title": "Important Users & Groups"
   },
-  "USER_PROFILES": {
+  "HISTORICAL_USERS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "User Profiles"
+    "title": "Historical User Presence"
   },
-  "ADMINISTRATOR_ACCOUNTS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "Administrator Accounts"
-  },
-  "LOCAL_GROUPS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/user-accounts.json",
-    "title": "Local Groups"
-  },
-  "INSTALLED_PROGRAMS": {
+  "OS_DETAILS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
-    "title": "Installed Programs"
+    "title": "Operating System Details"
+  },
+  "DRIVES_STORAGE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Drives & Storage"
   },
   "ENVIRONMENT_VARIABLES": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
     "title": "Environment Variables"
   },
-  "OPERATING_SYSTEM_INFORMATION": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
-    "title": "Operating System Information"
-  },
   "HOTFIXES": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
     "title": "Hotfixes (Patches)"
   },
-  "WINDOWS_DEFENDER_STATUS": {
+  "INSTALLED_SOFTWARE": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
+    "title": "Installed Software"
+  },
+  "WINDOWS_DEFENDER": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-information.json",
     "title": "Windows Defender Status"
   },
-  "PROCESSES": {
+  "PROCESS_LIST": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
-    "title": "Processes"
+    "title": "Process List"
   },
   "STARTUP_PROGRAMS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
     "title": "Startup Programs"
   },
-  "SCHEDULED_TASKS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
-    "title": "Scheduled Tasks"
+  "TCP_CONNECTIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "TCP Connections"
   },
-  "SERVICES": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
-    "title": "Services"
-  },
-  "REGISTRY_PERSISTENCE": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/system-processes.json",
-    "title": "registry persistence"
+  "LISTENING_PORTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Listening Ports"
   },
   "DNS_CACHE": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
     "title": "DNS Cache"
   },
-  "NETWORK_CONNECTIONS_AND_SESSIONS": {
+  "IP_CONFIGURATION": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "Network Connections and Sessions"
+    "title": "IP Configuration"
+  },
+  "NET_IP_ADDRESS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Net IP Address Information"
+  },
+  "IP_CONFIGURATION": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "IP Configuration"
+  },
+  "NET_CONNECTIONS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Network Connections"
+  },
+  "NET_NEIGHBOURS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Net Neighbours (ARP Cache)"
+  },
+  "WIFI_PASSWORD": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "WiFi Passwords"
+  },
+  "NETWORK_SHARES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Network Shares"
+  },
+  "NETWORK_ADAPTERS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
+    "title": "Current IP Configuration"
   },
   "FIREWALL_RULES": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
     "title": "Firewall Rules"
   },
-  "WIRELESS_NETWORKS": {
+  "OUTBOUND_SMB_SESSIONS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "Wireless Networks"
+    "title": "Outbound SMB Sessions"
   },
-  "IP_ROUTING_INFORMATION": {
+  "ALL_SMB_SESSIONS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "IP Routing Information"
+    "title": "All SMB Sessions"
   },
-  "NETWORK_ADAPTERS": {
+  "NETWORK_HOPS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "Network Adapters and Configuration"
+    "title": "Network Hops"
   },
-  "SMB_SESSIONS": {
+  "ADAPTER_HOPS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "SMB Sessions"
+    "title": "Adapter Hops"
   },
-  "SMB_SHARES": {
+  "IP_HOPS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "SMB Shares"
+    "title": "IP Hops"
   },
-  "ARP_CACHE": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "Address Resolution Protocol Cache"
+  "SERVICES_LIST": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/services.json",
+    "title": "Services List"
   },
-  "IP_CONFIGURATION": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/network-information.json",
-    "title": "Current IP Configuration"
+  "SCHEDULED_TASKS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/scheduled-tasks.json",
+    "title": "Scheduled Tasks"
+  },
+  "GROUP_ENUMERATION_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Group Enumeration Events (Security Log)"
+  },
+  "RDP_LOGINS_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "RDP Logins Events (Security Log)"
+  },
+  "RDP_AUTH_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "RDP Authentication Events (Security Log)"
+  },
+  "OUTGOING_RDP_CONN_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Outgoing RDP Connection Events (Security Log)"
+  },
+  "USER_CREATION_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "User Creation Events (Security Log)"
+  },
+  "PASSWORD_RESET_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Password Reset Events (Security Log)"
+  },
+  "USER_ADDED_GROUP_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "User Added to Group Events (Security Log)"
+  },
+  "ENABLED_USER_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Enabled User Events (Security Log)"
+  },
+  "DISABLED_USER_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Disabled User Events (Security Log)"
+  },
+  "DELETED_USER_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Deleted User Events (Security Log)"
+  },
+  "LOCKED_OUT_USER_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Locked Out User Events (Security Log)"
+  },
+  "USER_CREATION_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "User Creation Events (Security Log)"
+  },
+  "CREDENTIAL_MANAGER_BACKUP_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Credential Manager Backup Events (Security Log)"
+  },
+  "CREDENTIAL_MANAGER_RESTORE_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Credential Manager Restore Events (Security Log)"
+  },
+  "LOGON_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Logon Events (Security Log)"
+  },
+  "FAILED_LOGON_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Failed Logon Events (Security Log)"
+  },
+  "OBJECT_ACCESS_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Object Access Events (Security Log)"
+  },
+  "PROCESS_EXEC_EVENTS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
+    "title": "Process Execution Events (Security Log)"
+  },
+  "USB_DEVICES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "USB Devices"
+  },
+  "IMAGE_DEVICES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Image Devices"
+  },
+  "UPNP_DEVICES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "UPnP Devices"
+  },
+  "UNKNOWN_DRIVES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Unknown Drives"
+  },
+  "RECENT_FILES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Recent Files"
+  },
+  "LINK_FILES": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Link Files"
+  },
+  "EXECS_IN_DOWNLOADS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Executables in Downloads"
+  },
+  "EXECTS_IN_TEMPS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Executables in Temp"
+  },
+  "EXECS_IN_SYS_TEMP": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Executables in System Temp"
+  },
+  "EXECS_IN_PERFLOGS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Executables in PerfLogs"
+  },
+  "EXECS_IN_DOC_FOLDER": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "Executables in Document Folder"
+  },
+  "POWERSHELL_HISTORY": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "PowerShell History"
+  },
+  "BITLOCKER_KEY": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/files-usb.json",
+    "title": "BitLocker Key"
   },
   "GPO_REPORT": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
@@ -5799,70 +5647,31 @@ const ForensicatorDocs = {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
     "title": "WINPMEM RAM CAPTURE (/RAM)"
   },
-  "BROWSING_HISTORY": {
+  "HASH_MATCHES": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
-    "title": "Browsing History Dump (/BROWSING_HISTORY)"
+    "title": "Hash Matches (/HASH_MATCHES)"
   },
-  "NETWORK_TRACE": {
+  "NETWORK_CAPTURE": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
-    "title": "Network Trace (/PCAP)"
+    "title": "Network Capture (/PCAP)"
   },
-  "OTHER_COLLECTIONS": {
+  "EVTX_LOGS": {
     "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
-    "title": "Other Collections"
+    "title": "EVTX Logs (/EVTX)"
   },
-  "SIGMA_RULES": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/detections.json",
-    "title": "Sigma Rules"
+  "IIS_LOGS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "IIS Logs (/IIS)"
   },
-  "RANSOMWARE_ARTIFACTS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/detections.json",
-    "title": "Ransomware Artifacts"
+  "TOMCAT_LOGS": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "Tomcat Logs (/TOMCAT)"
   },
-  "MALICIOUS_HASH_CHECK": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/detections.json",
-    "title": "Malicious Hash Check"
+  "LOG4J": {
+    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/forensicator-extras.json",
+    "title": "Log4j (/LOG4J)"
   },
-  "LOGON_EVENTS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
-    "title": "Logon Events (Security Log)"
-  },
-  "PROCESS_EXECUTION_EVENTS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
-    "title": "Process Execution Events (Security Log)"
-  },
-  "USER_AND_GROUP_MANAGEMENT_EVENTS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
-    "title": "User and Group Management Events (Security Log)"
-  },
-  "OBJECT_ACCESS_EVENTS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
-    "title": "Object Access Events (Security Log)"
-  },
-  "USER_LOCKOUT_ACTIVITIES": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
-    "title": "User LockOut Activities (Security Log)"
-  },
-  "CREDENTIAL_MANAGER_ACTIVITIES": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/event-log-analysis.json",
-    "title": "Credential Manager Activities (Security Log)"
-  },
-  "DEVICE_AND_DRIVE_INFORMATION": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
-    "title": "Device and Drive Information"
-  },
-  "POWERSHELL_COMMAND_HISTORY": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
-    "title": "PowerShell Command History"
-  },
-  "EXECUTABLES_IN_UNUSUAL_LOCATIONS": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
-    "title": "Executables in Unusual Locations"
-  },
-  "LINK_FILES": {
-    "url": "https://raw.githubusercontent.com/Raptormatics/forensicator-docs/main/detections/JSON/other-checks.json",
-    "title": "All Link Files Created in the last 180days"
-  }
+
 
 };
 
@@ -6283,6 +6092,59 @@ document.addEventListener("click", function(e) {
   openPanelFromJSON(config.url, config.title, key);
 });
 
+function initializeForensicatorExportTables() {
+  if (!window.jQuery || !jQuery.fn || !jQuery.fn.DataTable) {
+    return;
+  }
+
+  jQuery("table.data-table-export").each(function () {
+    if (jQuery.fn.DataTable.isDataTable(this)) {
+      return;
+    }
+
+    jQuery(this).DataTable({
+      dom: "Bfrtip",
+      pageLength: 25,
+      responsive: true,
+      buttons: [
+        { extend: "csvHtml5", titleAttr: "Export CSV" },
+        { extend: "pdfHtml5", titleAttr: "Export PDF" },
+        { extend: "print", titleAttr: "Print" }
+      ]
+    });
+  });
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initializeForensicatorExportTables);
+} else {
+  initializeForensicatorExportTables();
+}
+
+// Section accordion toggle — works on all report pages
+(function () {
+  function initAccordion() {
+    document.querySelectorAll('.det-card-head').forEach(function (h) {
+      // skip sigma discover topbar (has its own click handling)
+      if (h.closest('.discover-wrapper')) return;
+      if (h.dataset.accordionInit) return;
+      h.dataset.accordionInit = '1';
+      h.addEventListener('click', function () {
+        var body = h.nextElementSibling;
+        if (!body || !body.classList.contains('det-card-body')) return;
+        var isOpen = body.style.display !== 'none';
+        body.style.display = isOpen ? 'none' : '';
+        h.classList.toggle('collapsed', isOpen);
+      });
+    });
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initAccordion);
+  } else {
+    initAccordion();
+  }
+}());
+
 </script>
 '@
 
@@ -6295,7 +6157,7 @@ function New-FIIcon {
     return "<span class='fd-info-trigger' data-detection='$Key' data-tooltip='View investigation guidance'>ⓘ</span>"
 }
 
-
+#>
 
 
 
@@ -6307,2661 +6169,3247 @@ function New-FIIcon {
 Write-ForensicLog "[*] Creating and Formatting the HTML files" -Level INFO -Section "CORE"
 
 
-function ForensicatorIndex {
+$ArtifactRootPath = "$PSScriptRoot\$env:COMPUTERNAME"
 
-  @"
+function New-ExtrasArtifactRow {
+  param(
+    [string]$Label,
+    [string]$Folder,
+    [string[]]$Patterns
+  )
 
-$Style_Head
+  $folderPath = Join-Path $ArtifactRootPath $Folder
+  $exists = Test-Path $folderPath
 
-$Style_Menu
+  $browseCell = if ($exists) {
+    $folderUri = ([Uri](Get-Item -Path $folderPath).FullName).AbsoluteUri
+    "<a class='btn' href='$folderUri' target='_blank' rel='noopener'>Open Folder</a>"
+  } else {
+    "<span class='dim-cell'>Not collected</span>"
+  }
+
+  $allFiles = @()
+  $latestFile = $null
+  if ($exists) {
+    $allFiles = @(Get-ChildItem -Path $folderPath -Recurse -File -ErrorAction SilentlyContinue)
+    if ($Patterns -and $Patterns.Count -gt 0) {
+      $latestFile = $allFiles |
+        Where-Object {
+          $name = $_.Name.ToLowerInvariant()
+          $matched = $false
+          foreach ($pattern in $Patterns) {
+            if ($name -like $pattern.ToLowerInvariant()) {
+              $matched = $true
+              break
+            }
+          }
+          $matched
+        } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    }
+  }
+
+  $latestCell = if ($latestFile) {
+    $latestUri = ([Uri]$latestFile.FullName).AbsoluteUri
+    "<a class='btn' href='$latestUri' target='_blank' rel='noopener'>Open Latest</a>"
+  } else {
+    "<span class='dim-cell'>N/A</span>"
+  }
+
+  $statusCell = if ($exists) { "<span class='ok-cell'>Collected</span>" } else { "<span class='dim-cell'>Missing</span>" }
+  $fileCount = if ($exists) { $allFiles.Count } else { 0 }
+
+  return "<tr><td>$Label</td><td class='mono-cell'>$Folder/</td><td>$browseCell $latestCell</td><td>$statusCell</td><td class='mono-cell'>$fileCount</td></tr>"
+}
+
+$ExtrasArtifactsFragment = @(
+  (New-ExtrasArtifactRow -Label 'RAM Capture'                 -Folder 'RAM'              -Patterns @('*.raw','*.dmp','*.vmem')),
+  (New-ExtrasArtifactRow -Label 'Network Capture'             -Folder 'PCAP'             -Patterns @('*.pcap','*.pcapng','*.etl')),
+#  (New-ExtrasArtifactRow -Label 'Forensicator Logs' -Folder 'LOGS'             -Patterns @('*.csv','*.json','*.txt')),
+  (New-ExtrasArtifactRow -Label 'Hash Matches'                -Folder 'HashMatches'      -Patterns @('*.csv','*.json','*.txt')),
+  (New-ExtrasArtifactRow -Label 'Group Policy Report'         -Folder 'GroupPolicy'      -Patterns @('*.html')),
+  (New-ExtrasArtifactRow -Label 'EVTX Logs'                   -Folder 'EVTX'             -Patterns @('*.evtx')),
+  (New-ExtrasArtifactRow -Label 'IIS Logs'                    -Folder 'IISLogs'          -Patterns @('*.log')),
+  (New-ExtrasArtifactRow -Label 'TomCat Logs'                 -Folder 'TomCatLogs'       -Patterns @('*.log')),
+  (New-ExtrasArtifactRow -Label 'Log4j Findings'              -Folder 'LOG4J'       -Patterns @('*.txt'))
+
+  
+) -join "`n"
 
 
-<div class="mobile-menu-overlay"></div>
-<div class="main-container">
-<div class="pd-ltr-20 xs-pd-20-10">
-<div class="min-height-200px">
-<div class="page-header">
-<div class="row">
-<div class="col-md-6 col-sm-12">
-<div class="title">
-<h4>Home</h4>
-</div>
-<nav aria-label="breadcrumb" role="navigation">
-<ol class="breadcrumb">
-<li class="breadcrumb-item">
-<a href="index.html">Home</a>
-</li>
-<li class="breadcrumb-item active" aria-current="page">
-Index
-</li>
-</ol>
+
+function HTMLFiles {
+
+@"
+
+
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Live Forensicator — $Hostname</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   FORENSICATOR REPORT TEMPLATE  —  Elastic / Wazuh Discover Style
+   ═══════════════════════════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  /* surfaces */
+  --bg:        #07090f;
+  --surface:   #0d111a;
+  --surface2:  #111827;
+  --surface3:  #161e2e;
+  --border:    #1e2d42;
+  --border2:   #243650;
+
+  /* brand */
+  --blue:      #3b82f6;
+  --blue-dim:  #1d4ed8;
+  --blue-bg:   rgba(59,130,246,.08);
+
+  /* severity */
+  --crit:      #ef4444;
+  --high:      #f97316;
+  --med:       #eab308;
+  --low:       #22c55e;
+  --info:      #3b82f6;
+
+  /* text */
+  --text:      #e2e8f0;
+  --text2:     #94a3b8;
+  --text3:     #4b6278;
+
+  /* sidebar */
+  --sb-w:      220px;
+  --topbar-h:  52px;
+
+  --font:      'IBM Plex Sans',  system-ui, sans-serif;
+  --mono:      'IBM Plex Mono', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: var(--font);
+  background:  var(--bg);
+  color:       var(--text);
+  font-size:   13px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* ── TOPBAR ────────────────────────────────────────────────────────────────── */
+#topbar {
+  position: fixed; top:0; left:0; right:0;
+  height: var(--topbar-h);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center;
+  padding: 0 16px 0 0;
+  z-index: 300;
+  gap: 0;
+}
+
+.topbar-brand {
+  width: var(--sb-w);
+  flex-shrink: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 16px;
+  border-right: 1px solid var(--border);
+  height: 100%;
+  text-decoration: none;
+}
+
+.brand-icon {
+  width: 28px; height: 28px;
+  background: var(--blue);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; flex-shrink: 0;
+}
+
+.brand-text {
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  letter-spacing: -.3px;
+}
+
+.brand-text span { color: var(--blue); }
+
+.topbar-meta {
+  display: flex; align-items: center; gap: 0;
+  padding: 0 20px;
+  flex: 1;
+}
+
+.meta-chip {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text2);
+  margin-right: 8px;
+  font-family: var(--mono);
+}
+
+.meta-chip strong { color: var(--text); }
+
+.topbar-right {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+}
+
+.version-pill {
+  background: rgba(59,130,246,.15);
+  border: 1px solid rgba(59,130,246,.3);
+  color: var(--blue);
+  font-size: 10px; font-weight: 600;
+  padding: 3px 9px; border-radius: 12px;
+  letter-spacing: .06em;
+}
+
+/* ── SIDEBAR ───────────────────────────────────────────────────────────────── */
+#sidebar {
+  position: fixed;
+  top: var(--topbar-h); left: 0; bottom: 0;
+  width: var(--sb-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  z-index: 200;
+  padding: 16px 0 40px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border2) transparent;
+}
+
+.sb-section { margin-bottom: 4px; }
+
+.sb-label {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: .14em; text-transform: uppercase;
+  color: var(--text3);
+  padding: 10px 16px 5px;
+}
+
+.sb-link {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 16px;
+  color: var(--text2);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: all .12s;
+  user-select: none;
+  font-size: 13px;
+}
+
+.sb-link:hover { color: var(--text); background: rgba(255,255,255,.03); }
+
+.sb-link.active {
+  color: var(--blue);
+  border-left-color: var(--blue);
+  background: var(--blue-bg);
+}
+
+.sb-icon { width: 16px; text-align: center; font-style: normal; flex-shrink: 0; }
+
+.sb-badge {
+  margin-left: auto;
+  background: var(--crit);
+  color: #fff;
+  font-size: 10px; font-weight: 700;
+  padding: 1px 6px; border-radius: 10px;
+  display: none;
+}
+
+.sb-badge.show { display: inline-block; }
+
+.sb-divider {
+  height: 1px; background: var(--border);
+  margin: 10px 0;
+}
+
+/* ── MAIN LAYOUT ───────────────────────────────────────────────────────────── */
+#main {
+  margin-left: var(--sb-w);
+  margin-top: var(--topbar-h);
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── VIEWS ─────────────────────────────────────────────────────────────────── */
+.view { display: none; padding: 24px 28px 60px; }
+.view.active { display: block; }
+
+.view-header {
+  display: flex; align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 24px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.view-title {
+  font-size: 18px; font-weight: 700;
+  color: var(--text);
+  letter-spacing: -.3px;
+}
+
+.view-sub {
+  font-size: 12px; color: var(--text2);
+  margin-top: 3px;
+}
+
+/* ── STAT CARDS ────────────────────────────────────────────────────────────── */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color .15s, transform .15s;
+  position: relative;
+  overflow: hidden;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent, var(--blue));
+  opacity: .6;
+}
+
+.stat-card:hover {
+  border-color: var(--accent, var(--blue));
+  transform: translateY(-1px);
+}
+
+.stat-num {
+  font-size: 28px; font-weight: 700;
+  color: var(--accent, var(--blue));
+  line-height: 1;
+  font-family: var(--mono);
+}
+
+.stat-label {
+  font-size: 11px; color: var(--text2);
+  text-transform: uppercase; letter-spacing: .08em;
+  margin-top: 5px;
+}
+
+.stat-trend {
+  font-size: 10px; color: var(--text3);
+  margin-top: 3px;
+}
+
+/* ── PANEL ─────────────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 20px;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex; align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+
+.panel-title {
+  font-size: 13px; font-weight: 600;
+  color: var(--text);
+  display: flex; align-items: center; gap: 8px;
+}
+
+.panel-count {
+  font-family: var(--mono);
+  font-size: 11px; color: var(--text2);
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  padding: 2px 8px; border-radius: 4px;
+}
+
+.panel-actions { display: flex; gap: 6px; align-items: center; }
+
+/* ── SEARCH BAR ────────────────────────────────────────────────────────────── */
+.search-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.search-wrap { flex: 1; position: relative; }
+
+.search-wrap input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 7px 12px 7px 32px;
+  border-radius: 5px;
+  outline: none;
+  transition: border-color .15s;
+}
+
+.search-wrap input:focus { border-color: var(--blue); }
+.search-wrap input::placeholder { color: var(--text3); }
+
+.search-ico {
+  position: absolute; left: 10px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--text3); font-size: 12px;
+  pointer-events: none;
+}
+
+.hits-lbl {
+  font-size: 11px; color: var(--text2);
+  font-family: var(--mono);
+  white-space: nowrap;
+  min-width: 55px;
+}
+
+/* ── FILTER PILLS ──────────────────────────────────────────────────────────── */
+.filter-row {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.f-pill {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px; font-weight: 600;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all .12s;
+  user-select: none;
+}
+
+.f-pill:hover { filter: brightness(1.2); }
+.f-pill.active { filter: brightness(1.15); }
+
+.f-num { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+
+/* ── SEVERITY BADGES ───────────────────────────────────────────────────────── */
+.sev {
+  display: inline-block;
+  padding: 2px 7px; border-radius: 3px;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ── DISCOVER TABLE ────────────────────────────────────────────────────────── */
+.disc-wrap { overflow-x: auto; }
+
+table.disc {
+  width: 100%; border-collapse: collapse;
+  font-size: 12px;
+}
+
+.disc thead th {
+  background: var(--surface2);
+  color: var(--text3);
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.disc tbody tr.d-row {
+  border-bottom: 1px solid var(--surface2);
+  cursor: pointer;
+  transition: background .08s;
+}
+
+.disc tbody tr.d-row:hover { background: var(--surface2); }
+
+.disc td {
+  padding: 8px 12px;
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.d-expand { width: 20px; color: var(--text3); font-size: 10px; text-align: center; }
+.d-time   { font-family: var(--mono); font-size: 11px; color: var(--text2); white-space: nowrap; }
+.d-rule   { max-width: 280px; font-weight: 500; }
+.d-evid   { font-family: var(--mono); font-size: 11px; color: #7dd3fc; text-align: center; width: 55px; }
+.d-user   { font-size: 11px; color: #c4b5fd; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-proc   { font-family: var(--mono); font-size: 11px; color: #93c5fd; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-flag   { width: 8px; padding: 0; }
+
+/* KV detail panel */
+tr.d-detail td { background: var(--surface3) !important; padding: 0 !important; border: none !important; }
+
+.kv-panel { border-top: 1px solid var(--border2); }
+
+.kv-panel table { width: 100%; border-collapse: collapse; }
+
+.kv-panel tr { border-bottom: 1px solid var(--border); }
+
+.kv-panel td { padding: 6px 20px; vertical-align: top; font-size: 12px; }
+
+.kv-k { color: var(--text2); font-family: var(--mono); width: 230px; white-space: nowrap; font-weight: 500; }
+
+.kv-v { color: var(--text); font-family: var(--mono); word-break: break-all; }
+
+.kv-v code {
+  background: var(--surface);
+  padding: 3px 7px; border-radius: 3px;
+  font-size: 11px; display: inline-block;
+  border: 1px solid var(--border);
+}
+
+/* ── STANDARD TABLE ────────────────────────────────────────────────────────── */
+.tbl-wrap { overflow-x: auto; }
+
+table.std {
+  width: 100%; border-collapse: collapse;
+  font-size: 12px;
+}
+
+.std thead th {
+  background: var(--surface2);
+  color: var(--text3);
+  font-size: 10px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: left;
+}
+
+.std tbody tr { border-bottom: 1px solid var(--surface2); transition: background .08s; }
+.std tbody tr:hover { background: var(--surface2); }
+.std td { padding: 8px 14px; color: var(--text); vertical-align: top; }
+
+/* Browser history URL column wrap guard */
+#view-browser .url-cell {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 560px;
+}
+
+/* Process path and command line cell wrapping */
+.path-cell, .cmd-cell {
+  white-space: normal;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  max-width: 400px;
+}
+
+.cmd-cell { max-width: 500px; }
+
+.mono-cell { font-family: var(--mono); font-size: 11px; color: #93c5fd; }
+.flag-cell { color: var(--crit) !important; font-weight: 600; }
+.warn-cell { color: var(--high) !important; }
+.ok-cell   { color: var(--low)  !important; }
+.dim-cell  { color: var(--text2); }
+
+/* ── BAR CHART (pure CSS) ──────────────────────────────────────────────────── */
+.bar-chart { padding: 12px 16px 16px; }
+
+.bar-row {
+  display: flex; align-items: center;
+  gap: 10px; margin-bottom: 9px;
+}
+
+.bar-label { width: 160px; font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 0; }
+
+.bar-track {
+  flex: 1; height: 16px;
+  background: var(--surface2);
+  border-radius: 3px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.bar-fill {
+  height: 100%; border-radius: 3px;
+  background: var(--blue);
+  transition: width .4s ease;
+}
+
+.bar-val { width: 40px; text-align: right; font-family: var(--mono); font-size: 11px; color: var(--text2); }
+
+/* ── TIMELINE ──────────────────────────────────────────────────────────────── */
+.timeline { padding: 0 16px 16px; display: flex; align-items: flex-end; gap: 3px; height: 80px; }
+
+.tl-bar {
+  flex: 1; background: rgba(59,130,246,.3);
+  border-radius: 2px 2px 0 0;
+  border: 1px solid rgba(59,130,246,.5);
+  cursor: pointer;
+  transition: background .12s;
+  position: relative;
+}
+
+.tl-bar:hover { background: rgba(59,130,246,.6); }
+
+.tl-bar::after {
+  content: attr(data-label);
+  position: absolute; bottom: -16px; left: 50%;
+  transform: translateX(-50%);
+  font-size: 9px; color: var(--text3);
+  white-space: nowrap;
+}
+
+/* ── GRID LAYOUTS ──────────────────────────────────────────────────────────── */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 1024px) { .grid-2 { grid-template-columns: 1fr; } }
+
+/* ── EMPTY STATE ───────────────────────────────────────────────────────────── */
+.empty {
+  text-align: center;
+  padding: 48px 20px;
+  color: var(--text3);
+}
+
+.empty-icon { font-size: 32px; margin-bottom: 10px; }
+.empty-msg  { font-size: 13px; }
+
+/* ── BUTTONS / CONTROLS ────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 12px;
+  border-radius: 5px;
+  font-family: var(--font);
+  font-size: 12px; font-weight: 500;
+  border: 1px solid var(--border2);
+  background: var(--surface2);
+  color: var(--text2);
+  cursor: pointer;
+  transition: all .12s;
+  white-space: nowrap;
+}
+
+.btn:hover { border-color: var(--blue); color: var(--text); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+.btn.primary:hover { background: var(--blue-dim); }
+
+/* ── ALERT BANNER ──────────────────────────────────────────────────────────── */
+.alert-banner {
+  border-left: 3px solid;
+  padding: 10px 14px;
+  border-radius: 0 5px 5px 0;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.alert-banner.crit  { background: rgba(239,68,68,.08);  border-color: var(--crit); color: #fca5a5; }
+.alert-banner.high  { background: rgba(249,115,22,.08); border-color: var(--high); color: #fdba74; }
+.alert-banner.info  { background: rgba(59,130,246,.08); border-color: var(--blue); color: #93c5fd; }
+
+/* ── DETAIL KEY/VALUE LIST ─────────────────────────────────────────────────── */
+.kv-list { padding: 12px 0; }
+
+.kv-list-row {
+  display: flex; gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 7px 16px;
+}
+
+.kv-list-row:last-child { border-bottom: none; }
+
+.kv-list-k {
+  width: 200px; flex-shrink: 0;
+  color: var(--text2); font-family: var(--mono);
+  font-size: 11px; font-weight: 500;
+}
+
+.kv-list-v {
+  color: var(--text); font-size: 12px;
+  word-break: break-all;
+}
+
+/* ── SCROLLBAR ─────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* ── NO-PRINT CONTROLS ─────────────────────────────────────────────────────── */
+@media print {
+  #sidebar, #topbar { display: none; }
+  #main { margin: 0; }
+  .view { display: block !important; page-break-before: always; }
+  .view:first-of-type { page-break-before: avoid; }
+}
+
+
+/* ── PAGINATION BAR ────────────────────────────────────────────────────────── */
+.pg-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface2);
+  gap: 12px; flex-wrap: wrap;
+}
+
+.pg-info {
+  font-size: 11px; color: var(--text2);
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.pg-controls { display: flex; align-items: center; gap: 3px; }
+
+.pg-btn {
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 9px; border-radius: 4px;
+  cursor: pointer;
+  transition: all .12s;
+  min-width: 30px; text-align: center;
+  line-height: 1.4;
+}
+
+.pg-btn:hover:not([disabled]) { border-color: var(--blue); color: var(--blue); }
+.pg-btn.pg-active { background: var(--blue); border-color: var(--blue); color: #fff; }
+.pg-btn[disabled] { opacity: .28; cursor: not-allowed; }
+
+.pg-ellipsis { padding: 0 5px; color: var(--text3); font-size: 12px; line-height: 1.8; }
+
+.pg-select {
+  background: var(--surface3);
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 7px; border-radius: 4px;
+  cursor: pointer; outline: none;
+  margin-right: 10px;
+}
+
+.pg-select:focus { border-color: var(--blue); }
+
+
+</style>
+</head>
+<body>
+
+<script id="forensicator-data">
+/* ── INLINE DATA — injected by PowerShell at report generation time ── */
+var SIGMA_DATA = $($script:sigmaJsonSafe);
+var HASH_DATA  = $($script:hashJsonSafe);
+var IOC_DATA   = $($script:iocJsonSafe);
+</script>
+<script defer src="forensicator-runtime.js"></script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     TOPBAR
+═══════════════════════════════════════════════════════════════════════════ -->
+<header id="topbar">
+  <div class="topbar-brand">
+    <div class="brand-icon">🔍</div>
+    <div class="brand-text">Live<span>Forensicator</span></div>
+  </div>
+
+  <div class="topbar-meta">
+    <div class="meta-chip">🖥 <strong id="tb-host">$Hostname</strong></div>
+    <div class="meta-chip">👤 <strong id="tb-operator">$Handler</strong></div>
+    <div class="meta-chip">📋 <strong id="tb-caseno">$CASENO</strong></div>
+    <div class="meta-chip">📁 <strong id="tb-case-title">$CaseTitle</strong></div>
+    <div class="meta-chip">🌐 <strong id="tb-loc">$Loc</strong></div>
+    <div class="meta-chip">💻 <strong id="tb-device">$Device</strong></div>
+    <div class="meta-chip">🕐 <strong id="tb-date">$ForensicatorStartTime </strong></div>
+  </div>
+
+  <div class="topbar-right">
+    <span class="version-pill">v4.1.2</span>
+    <button class="btn" onclick="window.print()">🖨 Print</button>
+  </div>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SIDEBAR
+═══════════════════════════════════════════════════════════════════════════ -->
+<nav id="sidebar">
+
+  <div class="sb-section">
+    <div class="sb-label">Navigation</div>
+    <div class="sb-link active" onclick="nav('overview')">
+      <i class="sb-icon">📊</i> Overview
+    </div>
+  </div>
+
+  <div class="sb-divider"></div>
+
+  <div class="sb-section">
+    <div class="sb-label">Host Data</div>
+    <div class="sb-link" onclick="nav('users')">
+      <i class="sb-icon">👤</i> Users &amp; Accounts
+    </div>
+    <div class="sb-link" onclick="nav('system')">
+      <i class="sb-icon">🖥</i> System Info
+    </div>
+    <div class="sb-link" onclick="nav('processes')">
+      <i class="sb-icon">⚙</i> Processes
+    </div>
+    <div class="sb-link" onclick="nav('network')">
+      <i class="sb-icon">🌐</i> Network
+    </div>
+    <div class="sb-link" onclick="nav('services')">
+      <i class="sb-icon">⚡</i> Services
+    </div>
+    <div class="sb-link" onclick="nav('scheduled')">
+      <i class="sb-icon">📅</i> Scheduled Tasks
+    </div>
+  </div>
+
+  <div class="sb-divider"></div>
+
+  <div class="sb-section">
+    <div class="sb-label">Analysis</div>
+    <div class="sb-link" onclick="nav('eventlog')">
+      <i class="sb-icon">📋</i> Event Log
+    </div>
+    <div class="sb-link" onclick="nav('browser')">
+      <i class="sb-icon">🌍</i> Browser History
+    </div>
+    <div class="sb-link" onclick="nav('files')">
+      <i class="sb-icon">📁</i> Files &amp; USB
+    </div>
+  </div>
+
+  <div class="sb-divider"></div>
+
+  <div class="sb-section">
+    <div class="sb-label">Extras</div>
+    <div class="sb-link" onclick="nav('extras')">
+      <i class="sb-icon">🧰</i> Extras
+    </div>
+  </div>
+
+  <div class="sb-divider"></div>
+
+  <div class="sb-section">
+    <div class="sb-label">Detections</div>
+    <div class="sb-link" onclick="nav('detections')">
+      <i class="sb-icon">🚨</i> Sigma / Rules
+      <span class="sb-badge" id="badge-detections">0</span>
+    </div>
+    <div class="sb-link" onclick="nav('hashes')">
+      <i class="sb-icon">🦠</i> Hash Matches
+      <span class="sb-badge" id="badge-hashes">0</span>
+    </div>
+    <div class="sb-link" onclick="nav('ioc')">
+      <i class="sb-icon">🔗</i> IOC Matches
+      <span class="sb-badge" id="badge-ioc">0</span>
+    </div>
+  </div>
+
 </nav>
-</div>
-</div>
-</div>
 
-
-<div class="main-container">
-<div class="pd-ltr-20">
-<div class="card-box pd-20 height-100-p mb-30">
-<div class="row align-items-center">
-<div class="col-md-4">
-<img src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png" alt="" />
-</div>
-<div class="col-md-8">
-<h4 class="font-20 weight-500 mb-10 text-capitalize">
-Live Forensics Results for
-<div class="weight-600 font-30 text-blue">$env:computername</div>
-</h4>
-<p class="font-18 max-width-600">
-This HTML File and its associated files were generated by the
-Live Forensicator script, we believe the contents will aid
-you to understand if the system has been compromised, the
-final conclusion is up to the investigator.
-</p>
-</div>
-</div>
-</div>
-</div>
-</div>
-<div class="main-container">
-<div class="pd-ltr-20">
-<!-- Bordered table  start -->
-<div class="pd-20 card-box mb-30">
-<div class="clearfix mb-20">
-<div class="pull-left">
-<h4 class="text-blue h4">Key Information</h4>
-<p>
-This space contains information about the examiner, case and exhibit details
-Analysis Start and end time is also recorded.
-</p>
-</div>
-</div>
-<table class="table table-bordered">
-<thead>
-<tr>
-<th scope="col">#</th>
-<th scope="col">Details</th>
-<th scope="col">Values</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<th scope="row">1</th>
-<td>Case reference:</td>
-<td>$CASENO</td>
-</tr>
-<tr>
-<th scope="row">2</th>
-<td>Examiner Name:</td>
-<td>$Handler</td>
-</tr>
-<tr>
-<th scope="row">3</th>
-<td>Exhibit reference:</td>
-<td>$Ref</td>
-</tr>
-</tr>
-<tr>
-<th scope="row">4</th>
-<td>Device:</td>
-<td>$Des</td>
-</tr>
-</tr>
-<tr>
-<th scope="row">5</th>
-<td>Examination Location:</td>
-<td>$Loc</td>
-</tr>
-</tr>
-<tr>
-<th scope="row">6</th>
-<td>Start Time and Date:</td>
-<td>$ForensicatorStartTime</td>
-</tr>
-</tr>
-<tr>
-<th scope="row">7</th>
-<td>End Time and Date:</td>
-<td>$ForensicatorEndTime</td>
-</tr>
-</tbody>
-</table>
-</div>
-<!--Bordered table End -->
-</div>
-</div>
-<!-- Export Datatable End -->
-</div>
-
-
-
-$Style_Footer
-
-
-"@
-}
-
-# Call the function to generate the report
-ForensicatorIndex | Out-File -FilePath $ForensicatorIndexFile
-
-
-#############################################################################################################
-#region   STYLES FOR NETWORKS                                   #############################################
-#############################################################################################################
-
-function NetworkStyle {
-
-  @"
-
-
-  $Style_Head
-
-
-  $Style_Menu
-
-
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Network-Information
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">DNS Cache $(New-FIIcon -Key "DNS_CACHE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Entry</th>
-                  <th >Name</th>
-                  <th >Status</th>
-                  <th >TimeToLive</th>
-                  <th >Data</th>
-                </tr>
-              </thead>
-              <tbody>
-                $DNSCacheFragment
-            </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Network Adapters $(New-FIIcon -Key "NETWORK_ADAPTERS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">AdapterType</th>
-                  <th >ProductName</th>
-                  <th >Description</th>
-                  <th >MACAddress</th>
-                  <th >Availability</th>
-                  <th >NetconnectionStatus</th>
-                  <th >NetEnabled</th>
-                  <th >PhysicalAdapter</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetworkAdapterFragment
-            </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Current IP Configuration $(New-FIIcon -Key "IP_CONFIGURATION")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Description</th>
-                  <th >MACAddress</th>
-                  <th >DNSDomain</th>
-                  <th >DNSHostName</th>
-                  <th >DHCPEnabled</th>
-                  <th >ServiceName</th>
-                </tr>
-              </thead>
-              <tbody>
-               $IPConfigurationFragment
-            </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Network Adapter IP Address - IPv4 & IPv6 $(New-FIIcon -Key "NETWORK_ADAPTER_IP_ADDRESS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">InterfaceAlias</th>
-                  <th >IPaddress</th>
-                  <th >EnabledStatus</th>
-                  <th >OperatingStatus</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetIPAddressFragment
-            </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Network Connection Profile $(New-FIIcon -Key "NETWORK_CONNECTION_PROFILE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th >InterfaceAlias</th>
-                  <th >NetworkCategory</th>
-                  <th >IPV4Connectivity</th>
-                  <th >IPv6Connectivity</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetConnectProfileFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Network Adapters & Bandwidth $(New-FIIcon -Key "NETWORK_ADAPTERS_BANDWIDTH")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th >InterfaceDescription</th>
-                  <th >Status</th>
-                  <th >MacAddress</th>
-                  <th >LinkSpeed</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetAdapterFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Address Resolution Protocol Cache $(New-FIIcon -Key "ARP_CACHE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">InterfaceAlias</th>
-                  <th >IPAddress</th>
-                  <th >LinkLayerAddress</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetNeighborFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Current TCP Connections and Associated Processes $(New-FIIcon -Key "TCP_CONNECTIONS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">LocalAddress</th>
-                  <th >LocalPort</th>
-                  <th >RemoteAddress</th>
-                  <th >RemotePort</th>
-                  <th >State</th>
-                  <th >OwningProcess</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetTCPConnectFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Associated WIFI Networks and Passwords $(New-FIIcon -Key "WIFI_NETWORKS_PASSWORDS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">PROFILE_NAME</th>
-                  <th >PASSWORD</th>
-                </tr>
-              </thead>
-              <tbody>
-               $WlanPasswordsFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Current Firewall Rules $(New-FIIcon -Key "FIREWALL_RULES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th >DisplayName</th>
-                  <th >Description</th>
-                  <th >Direction</th>
-                  <th >Action</th>
-                  <th >EdgeTraversalPolicy</th>
-                  <th >Owner</th>
-                  <th >EnforcementStatus</th>
-                </tr>
-              </thead>
-              <tbody>
-               $FirewallRuleFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Outbound SMB Sessions $(New-FIIcon -Key "SMB_SESSIONS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">LocalAddress</th>
-                  <th >LocalPort</th>
-                  <th >RemoteAddress</th>
-                  <th >RemotePort</th>
-                  <th >State</th>
-                  <th >AppliedSetting</th>
-                  <th >OwningProcess</th>
-                </tr>
-              </thead>
-              <tbody>
-                 $outboundSmbSessionsFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Active SMB Sessions (If Device is a Server) $(New-FIIcon -Key "SMB_SESSIONS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">SessionId</th>
-                  <th >ClientComputerName</th>
-                  <th >ClientUserName</th>
-                  <th >NumOpens</th>
-                </tr>
-              </thead>
-              <tbody>
-               $SMBSessionsFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Active SMB Shares on this device $(New-FIIcon -Key "SMB_SHARES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">description</th>
-                  <th >path</th>
-                  <th >volume</th>
-                </tr>
-              </thead>
-              <tbody>
-               $SMBSharesFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">IP Route to non local Destination $(New-FIIcon -Key "IP_ROUTE_NON_LOCAL")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">ifIndex</th>
-                  <th >DestinationPrefix</th>
-                  <th >NextHop</th>
-                  <th >RouteMetric</th>
-                  <th >ifMetric</th>
-                  <th >Interface</th>
-                </tr>
-              </thead>
-              <tbody>
-               $NetHopsFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Network adapters with IP Route to non local Destination $(New-FIIcon -Key "NETWORK_ADAPTERS_IP_ROUTE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th >InterfaceDescription</th>
-                  <th >ifIndex</th>
-                  <th >Status</th>
-                  <th >MacAddress</th>
-                  <th >LinkSpeed</th>
-                </tr>
-              </thead>
-              <tbody>
-               $AdaptHopsFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Ip hops with valid infinite lifetime $(New-FIIcon -Key "IP_HOPS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">ifIndex</th>
-                  <th >DestinationPrefix</th>
-                  <th >NextHop</th>
-                  <th >RouteMetric</th>
-                  <th >InterfaceMetric</th>
-                  <th >InterfaceAlias</th>
-                </tr>
-              </thead>
-              <tbody>
-               $IpHopsFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-NetworkStyle | Out-File -FilePath $NetworkFile
-
-#endregion
-
-
-#############################################################################################################
-#region   STYLES FOR USER SECTION                               #############################################
-#############################################################################################################
-
-function UserStyle {
-
-  @"
-
-  $Style_Head
-  $Style_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Users-Accounts
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Current User Information $(New-FIIcon -Key "CURRENT_USER_INFORMATION")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">UserName</th>
-                  <th >Domain</th>
-                  <th >User UUID</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td class="table-plus">$Env:UserName</td>
-                  <td>$Env:UserDomain</td>
-                  <td>$userUID</td>
-                </tr>
-            </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">System Details $(New-FIIcon -Key "SYSTEM_DETAILS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>DNSHostName</th>
-                  <th>Domain</th>
-                  <th>Manufacturer</th>
-                  <th>Model</th>
-                  <th>PrimaryOwnerName</th>
-                  <th>TotalPhysicalMemory</th>
-                  <th>Workgroup</th>
-                </tr>
-              </thead>
-              <tbody>
-               $systemnameFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Logon Sessions $(New-FIIcon -Key "LOGON_SESSIONS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">USERNAME</th>
-                  <th>SESSIONNAME</th>
-                  <th>STATE</th>
-                  <th>ID</th>
-                  <th>IDLE TIME</th>
-                  <th>LOGON TIME</th>
-                </tr>
-              </thead>
-              <tbody>
-               $logonsessionFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User Processes $(New-FIIcon -Key "USER_PROCESSES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap ">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Id</th>
-                  <th>User Name</th>
-                  <th>CPU</th>
-                  <th>Memory</th>
-                  <th>Path</th>
-                </tr>
-              </thead>
-              <tbody>
-               $userprocessesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User Profile $(New-FIIcon -Key "USER_PROFILE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Local Path</th>
-                  <th>SID</th>
-                  <th>Last Used</th>
-                </tr>
-              </thead>
-              <tbody>
-               $profileFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Administrator Accounts $(New-FIIcon -Key "ADMINISTRATOR_ACCOUNTS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Object Class</th>
-                  <th>Principle Source</th>
-                </tr>
-              </thead>
-              <tbody>
-               $adminFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Local Groups $(New-FIIcon -Key "LOCAL_GROUPS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-               $localFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-UserStyle | Out-File -FilePath $UserFile
-
-#endregion
-
-#############################################################################################################
-#region   STYLES FOR INSTALLED PROGS | SYSTEM INFO              #############################################
-#############################################################################################################
-
-function SystemStyle {
-
-  @"
-
-  $Style_Head
-  $Style_Menu 
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    System-Information
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Installed Programs $(New-FIIcon -Key "INSTALLED_PROGRAMS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Version</th>
-                  <th>Vendor</th>
-                  <th>InstallDate</th>
-                  <th>InstallSource</th>
-                  <th>PackageName</th>
-                  <th>LocalPackage</th>
-                </tr>
-              </thead>
-              <tbody>
-               $InstProgsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Installed Programs - From Registry $(New-FIIcon -Key "INSTALLED_PROGRAMS_REGISTRY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">DisplayName</th>
-                  <th>DisplayVersion</th>
-                  <th>Publisher</th>
-                  <th>InstallDate</th>
-                </tr>
-              </thead>
-              <tbody>
-               $InstalledAppsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Environment Variables $(New-FIIcon -Key "ENVIRONMENT_VARIABLES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">name</th>
-                  <th>value</th>
-                </tr>
-              </thead>
-              <tbody>
-               $envFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">System Information $(New-FIIcon -Key "SYSTEM_INFORMATION")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Caption</th>
-                  <th>SystemType</th>
-                  <th>Manufacturer</th>
-                  <th>Model</th>
-                  <th>DNSHostName</th>
-                  <th>Domain</th>
-                  <th>PartOfDomain</th>
-                  <th>WorkGroup</th>
-                  <th>CurrentTimeZone</th>
-                  <th>PCSystemType</th>
-                  <th>HyperVisorPresent</th>
-                </tr>
-              </thead>
-              <tbody>
-               $systeminfoFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Operating System Information $(New-FIIcon -Key "OPERATING_SYSTEM_INFORMATION")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Description</th>
-                  <th>Version</th>
-                  <th>BuildNumber</th>
-                  <th>InstallDate</th>
-                  <th>SystemDrive</th>
-                  <th>SystemDevice</th>
-                  <th>WindowsDirectory</th>
-                  <th>LastBootupTime</th>
-                  <th>Locale</th>
-                  <th>LocalDateTime</th>
-                  <th>NumberofUsers</th>
-                  <th>RegisteredUser</th>
-                  <th>Organization</th>
-                  <th>OSProductSuite</th>
-                </tr>
-              </thead>
-              <tbody>
-               $OSinfoFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Hotfixes $(New-FIIcon -Key "HOTFIXES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">CSName</th>
-                  <th>Caption</th>
-                  <th>Description</th>
-                  <th>HotfixID</th>
-                  <th>InstalledBy</th>
-                  <th>InstalledOn</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HotfixesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Windows Defender Status $(New-FIIcon -Key "WINDOWS_DEFENDER_STATUS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">AMProductVersion</th>
-                  <th>AMRunningMode</th>
-                  <th>AMServiceEnabled</th>
-                  <th>AntispywareEnabled</th>
-                  <th>AntispywareSignatureLastUpdated</th>
-                  <th>AntivirusEnabled</th>
-                  <th>AntivirusSignatureLastUpdated</th>
-                  <th>BehaviorMonitorEnabled</th>
-                  <th>DefenderSignaturesOutOfDate</th>
-                  <th>DeviceControlPoliciesLastUpdated</th>
-                  <th>DeviceControlState</th>
-                  <th>NISSignatureLastUpdated</th>
-                  <th>QuickScanEndTime</th>
-                  <th>RealTimeProtectionEnabled</th>
-                </tr>
-              </thead>
-            <tbody>
-               $WinDefenderFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-SystemStyle | Out-File -FilePath $SystemFile
-
-#endregion
-
-
-
-#############################################################################################################
-#region   STYLES FOR PROCESSES, SCHEDULED TASK | REGISTRY       #############################################
-#############################################################################################################
-
-function ProcessStyle {
-
-  @"
-
-  $Style_Head
-  $Style_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    System-Processes
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Processes $(New-FIIcon -Key "PROCESSES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Handles</th>
-                  <th>StartTime</th>
-                  <th>PM</th>
-                  <th>VM</th>
-                  <th>SI</th>
-                  <th>id</th>
-                  <th>ProcessName</th>
-                  <th>Path</th>
-                  <th>Product</th>
-                  <th>FileVersion</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ProcessesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Startup Programs $(New-FIIcon -Key "STARTUP_PROGRAMS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>command</th>
-                  <th>Location</th>
-                  <th>User</th>
-                </tr>
-              </thead>
-              <tbody>
-               $StartupProgsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Scheduled Task $(New-FIIcon -Key "SCHEDULED_TASK")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">TaskPath</th>
-                  <th>TaskName</th>
-                  <th>State</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ScheduledTaskFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Scheduled Task & State $(New-FIIcon -Key "SCHEDULED_TASK_STATE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">LastRunTime</th>
-                  <th>LastTaskResult</th>
-                  <th>NextRunTime</th>
-                  <th>NumberOfMissedRuns</th>
-                  <th>TaskName</th>
-                  <th>TaskPath</th>
-                  <th>PSComputerName</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ScheduledTask2Fragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Services $(New-FIIcon -Key "SERVICES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">ServiceName</th>
-                  <th>DisplayName</th>
-                  <th>Status</th>
-                  <th>StartType</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ServicesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Persistance in RegRun Registry $(New-FIIcon -Key "REGRUN")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Values</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RegRun
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Persistance in RegRunOnce Registry $(New-FIIcon -Key "REGRUNONCE")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Values</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RegRunOnce
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Persistance in RegRunOnceEx Registry $(New-FIIcon -Key "REGRUNONCEEX")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Values</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RegRunOnceEx
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-ProcessStyle | Out-File -FilePath $ProcessFile
-
-#endregion
-
-#############################################################################################################
-#region   OTHER NOTABLE CHECKS         ######################################################################
-#############################################################################################################
-
-function OthersStyle {
-
-  @"
-
-  $Style_Head
-  $Style_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Other-Checks
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Logical Drives $(New-FIIcon -Key "LOGICAL_DRIVES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">DeviceID</th>
-                  <th>DriveType</th>
-                  <th>FreeSpace</th>
-                  <th>Size</th>
-                  <th>VolumeName</th>
-                </tr>
-              </thead>
-              <tbody>
-                 $LogicalDrivesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">USB Devices $(New-FIIcon -Key "USB_DEVICES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">FriendlyName</th>
-                  <th>Driver</th>
-                  <th>mfg</th>
-                  <th>DeviceDesc</th>
-                </tr>
-              </thead>
-              <tbody>
-               $USBDevicesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Connected & Disconnected Webcams $(New-FIIcon -Key "WEBCAMS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Caption</th>
-                  <th>Manufacturer</th>
-                  <th>Status</th>
-                  <th>Present</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ImagedeviceFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">UPNPDevices $(New-FIIcon -Key "UPNP_DEVICES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Status</th>
-                  <th>Class</th>
-                  <th>FriendlyName</th>
-                  <th>Instance ID</th>
-                </tr>
-              </thead>
-              <tbody>
-               $UPNPDevicesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">All Previously Connected Drives $(New-FIIcon -Key "PREVIOUSLY_CONNECTED_DRIVES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">FriendlyName</th>
-                  <th>Manufacturer</th>
-                  <th>Serial</th>
-                  <th>Last Seen</th>  
-                </tr>
-              </thead>
-              <tbody>
-               $UnknownDrivesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">All Link Files Created in the last 180days $(New-FIIcon -Key "LINK_FILES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Target</th>
-                  <th>Arguments</th>
-                  <th>LastAccessed</th>
-                </tr>
-              </thead>
-              <tbody>
-               $LinkFilesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">500Days Powershell History $(New-FIIcon -Key "POWERSHELL_HISTORY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">User</th>
-                  <th>command</th>
-                </tr>
-              </thead>
-              <tbody>
-               $PSHistoryFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Executables in the Downloads folder $(New-FIIcon -Key "DOWNLOADS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>FullName</th>
-                  <th>CreationTimeUTC</th>
-                  <th>LastAccessTimeUTC</th>
-                  <th>LastWriteTimeUTC</th>
-                  <th>Attributes</th>
-                </tr>
-              </thead>
-              <tbody>
-               $DownloadsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Executables In AppData $(New-FIIcon -Key "APPDATA")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>FullName</th>
-                  <th>CreationTimeUTC</th>
-                  <th>LastAccessTimeUTC</th>
-                  <th>LastWriteTimeUTC</th>
-                  <th>Attributes</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HiddenExecs1Fragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Executables In Temp $(New-FIIcon -Key "EXECS_IN_TEMP")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>FullName</th>
-                  <th>CreationTimeUTC</th>
-                  <th>LastAccessTimeUTC</th>
-                  <th>LastWriteTimeUTC</th>
-                  <th>Attributes</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HiddenExecs2Fragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Executables In Perflogs $(New-FIIcon -Key "PERFLOGS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>FullName</th>
-                  <th>CreationTimeUTC</th>
-                  <th>LastAccessTimeUTC</th>
-                  <th>LastWriteTimeUTC</th>
-                  <th>Attributes</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HiddenExecs3Fragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Executables In Documents Folder $(New-FIIcon -Key "DOCUMENTS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>FullName</th>
-                  <th>CreationTimeUTC</th>
-                  <th>LastAccessTimeUTC</th>
-                  <th>LastWriteTimeUTC</th>
-                  <th>Attributes</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HiddenExecs4Fragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">BitLocker Drives $(New-FIIcon -Key "BITLOCKER_DRIVES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Mount Point</th>
-                  <th>Volume Type</th>
-                  <th>Status</th>
-                  <th>Encryption</th>
-                  <th>Encrypted %</th>
-                  <th>Protection</th>
-                  <th>Lock Status</th>
-                  <th>Protector Type</th>
-                  <th>Protector ID</th>
-                  <th>Key Material</th>
-                </tr>
-              </thead>
-              <tbody>
-               $BitLockerFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-OthersStyle | Out-File -FilePath $OthersFile
-
-#endregion
-
-
-###########################################################################################################
-#region ########################## CREATING AND FORMATTING THE EXTRAS FILE  ###############################
-###########################################################################################################
-
-
-
-function ForensicatorExtras {
-
-  @"
-
-  $Style_Head
-  $Style_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Extras</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Extras
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <div class="main-container">
-          <div class="pd-ltr-20">
-            <!-- Bordered table  start -->
-            <!-- Simple Datatable start -->
-            <div class="card-box mb-30">
-              <div class="pd-20">
-                <h4 class="text-blue h4">Extra Outputs </h4>
-                <p class="mb-0">
-                  Note: Not all checks will have a location output because the system might not meet the condition for the check.
-                </p>
-              </div>
-              <div class="pb-20">
-                <table class="data-table table nowrap">
-                  <thead>
-                    <tr>
-                      <th class="table-plus">Extra Checks</th>
-                      <th class="datatable-nosort">Location</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">Group Policy Report $(New-FIIcon -Key "GROUP_POLICY_REPORT")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue"
-                          href="GPOReport.html">GPOReport.html</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">WINPMEM RAM CAPTURE $(New-FIIcon -Key "WINPMEM_RAM_CAPTURE")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue" href="RAM">/RAM</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">BROWSING HISTORY DUMP $(New-FIIcon -Key "BROWSING_HISTORY_DUMP")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue" href="./BROWSING_HISTORY/">BROWSING HISTORY</a>
-                      </td>
-                    </tr>
-
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">NETWORK TRACE $(New-FIIcon -Key "NETWORK_TRACE")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue"
-                          href="PCAP">/PCAP</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">EVENT LOGS $(New-FIIcon -Key "EVENT_LOGS")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue"
-                          href="EVTXLOGS">/EVTXLOGS</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">IIS Logs $(New-FIIcon -Key "IIS_LOGS")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue"
-                          href="IISLogs">/IISLogs</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">TomCat Logs $(New-FIIcon -Key "TOMCAT_LOGS")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue"
-                          href="TomCatLogs">/TomCatLogs</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">Discovered Log4j $(New-FIIcon -Key "LOG4J")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue" href="LOG4J">/LOG4J</a>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td class="table-plus">
-                        <span class="badge badge-pill table-badge">Matched Hashes $(New-FIIcon -Key "MATCHED_HASHES")</span>
-                      </td>
-                      <td>
-                        <a target="_blank" class="text-blue" href="HashMatches">/HashMatches</a>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <!-- Simple Datatable End -->
-            <!-- Bordered table End -->
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+<script>
+window.nav = window.nav || function(id) {
+  document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
+  document.querySelectorAll('.sb-link').forEach(function(l){ l.classList.remove('active'); });
+  var view = document.getElementById('view-' + id);
+  if (view) view.classList.add('active');
+  document.querySelectorAll('.sb-link').forEach(function(link){
+    var handler = link.getAttribute('onclick') || '';
+    if (handler.indexOf("'" + id + "'") !== -1) link.classList.add('active');
+  });
+  window.scrollTo(0,0);
+};
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     MAIN CONTENT AREA
+═══════════════════════════════════════════════════════════════════════════ -->
+<main id="main">
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: OVERVIEW
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view active" id="view-overview">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Investigation Overview</div>
+      <div class="view-sub">Summary of all collected artifacts and detections</div>
+    </div>
+    <button class="btn primary" onclick="nav('detections')">🚨 View Detections</button>
+  </div>
+
+  <!-- Alert banners — shown only when findings exist -->
+  <div id="overview-alerts"></div>
+
+  <!-- Summary stat cards -->
+  <div class="stat-row" id="overview-stats">
+    <div class="js-rendered"></div>
+  </div>
+
+  <!-- Detection severity breakdown -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🚨 Detection Breakdown</div>
       </div>
+      <div class="bar-chart" id="sev-bars"></div>
+    </div>
 
-  $Style_Footer
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">📋 Host Summary</div>
+      </div>
+      <div class="kv-list" id="host-summary">$OSinfoFragment</div>
+    </div>
+  </div>
 
+  <!-- Top Sigma hits -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🔥 Top Detections</div>
+      <button class="btn" onclick="nav('detections')">View all →</button>
+    </div>
+    <div class="disc-wrap">
+      <table class="disc" id="overview-top-hits">
+        <thead>
+          <tr>
+            <th></th><th>Time</th><th>Severity</th>
+            <th>Rule</th><th>Evt</th><th>User</th><th>Process</th>
+          </tr>
+        </thead>
+        <tbody id="overview-hits-body">$script:SigmaOverviewRows</tbody>
+      </table>
+    </div>
+  </div>
 
-"@
-}
+</div><!-- /overview -->
 
-# Call the function to generate the report
-ForensicatorExtras | Out-File -FilePath $ForensicatorExtrasFile
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: USERS & ACCOUNTS
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-users">
 
-#endregion
+  <div class="view-header">
+    <div>
+      <div class="view-title">Users &amp; Accounts </div>
+      <div class="view-sub">Local accounts, logon sessions, admin group members</div>
+    </div>
+  </div>
 
-
-##################################################################################################################
-##################################################################################################################
-### EVENT LOG ANALYSIS STYLING         ###########################################################################
-##################################################################################################################
-##################################################################################################################
-
-$Global:EVTX_Menu = @"
-
-  <div class="left-side-bar header-white active">
-    <div class="brand-logo">
-      <a href="index.html">
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="dark-logo" />
-        <img
-          src="https://cdn.jsdelivr.net/gh/Johnng007/Live-Forensicator@main/styles/vendors/images/forensicator_logo.png"
-          alt="" class="light-logo" />
-      </a>
-      <div class="close-sidebar" data-toggle="left-sidebar-close">
-        <i class="ion-close-round"></i>
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">👤 Local User Accounts <span class="panel-count" id="users-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, status, description..." oninput="filterTable('users-tbody', this.value, [0,1,3,6,7,8])"/>
       </div>
     </div>
-    <div class="menu-block customscroll">
-      <div class="sidebar-menu">
-        <ul id="accordion-menu">
-          <li class="dropdown">
-            <a href="index.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-house"></span><span class="mtext">Home</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="users.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-people"></span><span class="mtext">Users & Accounts</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="system.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-pc-display"></span><span class="mtext">System Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="network.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Network Information</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="processes.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-cpu"></span><span class="mtext">System Processes</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="others.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-box-arrow-in-right"></span><span class="mtext">Other Checks</span>
-            </a>
-          </li>
-          <li class="dropdown">
-            <a href="javascript:;" class="dropdown-toggle">
-              <span class="micon bi bi-bezier"></span><span class="mtext">Event Log Analysis</span>
-            </a>
-            <ul class="submenu">
-              <li><a href="evtx_user.html">User Actions</a></li>
-              <li>
-                <a href="evtx_logons.html">Logon Events</a>
-              </li>
-              <li><a href="evtx_object.html">Object Access</a></li>
-              <li><a href="evtx_process.html">Process Execution</a></li>
-            </ul>
-          </li>
-          <li class="dropdown">
-            <a href="detection.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-terminal"></span><span class="mtext">Detections</span>
-            </a>
-          </li>
-          <li>
-            <div class="dropdown-divider"></div>
-          </li>
-          <li>
-            <div class="sidebar-small-cap">Extra</div>
-          </li>
-          <li class="dropdown">
-            <a href="extras.html" class="dropdown-toggle no-arrow">
-              <span class="micon bi bi-router"></span><span class="mtext">Forensicator Extras</span>
-            </a>
-          </li>
-        </ul>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr>
+            <th>Username</th><th>Enabled</th><th>Last Logon</th>
+            <th>Password Last Set</th><th>Password Expires</th><th>Description</th><th>Password Changeable Date</th><th>User May Change Password</th>
+          </tr>
+        </thead>
+        <tbody id="users-tbody">$LocalUserAccountsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🛡 Admin Group Members <span class="panel-count" id="admins-count">0</span></div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Domain/Username</th><th>Type</th><th>Principal Source</th></tr></thead>
+          <tbody id="admins-tbody">$adminFragment</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🔑 Active Logon Sessions <span class="panel-count" id="sessions-count">0</span></div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Username</th><th>Domain</th><th>LogonType</th><th>LogonTime</th><th>IdleTime</th></tr></thead>
+          <tbody id="sessions-tbody">$logonsessionFragment</tbody>
+        </table>
       </div>
     </div>
   </div>
 
-"@
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🛡 Important Users & Groups <span class="panel-count" id="groups-count">0</span></div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Group</th><th>Username</th><th>Domain</th><th>Type</th></tr></thead>
+          <tbody id="groups-tbody">$localFragment</tbody>
+        </table>
+      </div>
+    </div>
 
-#############################################################################################################
-#region   EVENT LOG ANALYSIS   USER ACTIVITIES        #######################################################
-#############################################################################################################
-
-function EvtxUserStyle {
-
-  @"
-
-  $Style_Head
-
-  $EVTX_Menu
-
-
-
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🔑 Historical User Presence <span class="panel-count" id="history-count">0</span></div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Username</th><th>SID</th><th>Last Use Time</th></tr></thead>
+          <tbody id="history-tbody">$profileFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
 
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Users-Activities
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">A user's local group membership was enumerated $(New-FIIcon -Key "LOCAL_GROUP_MEMBERSHIP")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>Performed On</th>
-                  <th>Performed By</th>
-                  <th>Logon Type</th>
-                  <th>PID</th>
-                  <th>Process Name</th>
-                </tr>
-              </thead>
-              <tbody>
-               $GroupMembershipFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">RDP Login Activities $(New-FIIcon -Key "RDP_LOGIN_ACTIVITIES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>Logon User</th>
-                  <th>Logon User Domain</th>
-                  <th>Logon IP</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RDPLoginsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">All RDP Login History $(New-FIIcon -Key "ALL_RDP_LOGIN_HISTORY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">TimeCreated</th>
-                  <th>User</th>
-                  <th>Domain</th>
-                  <th>Client</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RDPAuthsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+</div><!-- /users -->
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">All Outgoing RDP Connection History $(New-FIIcon -Key "ALL_OUTGOING_RDP_CONNECTION_HISTORY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">TimeStamp</th>
-                  <th>LocalUser</th>
-                  <th>Target RDP Host</th>
-                </tr>
-              </thead>
-              <tbody>
-               $OutRDPFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: SYSTEM INFO
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-system">
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User Creation Activity $(New-FIIcon -Key "USER_CREATION_ACTIVITY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>CreatedUser</th>
-                  <th>CreatedBy</th>
-                </tr>
-              </thead>
-              <tbody>
-               $CreatedUsersFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+  <div class="view-header">
+    <div>
+      <div class="view-title">System Information</div>
+      <div class="view-sub">OS details, installed software, startup items</div>
+    </div>
+  </div>
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Password Reset Activities $(New-FIIcon -Key "PASSWORD_RESET_ACTIVITIES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>TargetUser</th>
-                  <th>ActionedBy</th>
-                </tr>
-              </thead>
-              <tbody>
-               $PassResetFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">🖥 OS Details</div></div>
+      <div class="kv-list" id="os-details">$OSinfoFragment</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">💾 Drives &amp; Storage</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Drive</th><th>Label</th><th>Size (GB)</th><th>Free (GB)</th><th>%Free</th></tr></thead>
+          <tbody id="drives-tbody">$LogicalDrivesFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Users Added to Group $(New-FIIcon -Key "USERS_ADDED_TO_GROUP")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>AddedBy</th>
-                  <th>Target</th>
-                </tr>
-              </thead>
-              <tbody>
-               $AddedUsersFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User Enabling Activities $(New-FIIcon -Key "USER_ENABLING_ACTIVITIES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>EnabledBy</th>
-                  <th>EnabledAccount</th>
-                </tr>
-              </thead>
-              <tbody>
-               $EnabledUsersFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🛡 Environment Variables </div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Variable</th><th>Value</th></tr></thead>
+          <tbody id="env-tbody">$envFragment</tbody>
+        </table>
+      </div>
+    </div>
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User Disabling Activities $(New-FIIcon -Key "USER_DISABLING_ACTIVITIES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>DisabledBy</th>
-                  <th>Disabled</th>
-                </tr>
-              </thead>
-              <tbody>
-               $DisabledUsersFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+    <div class="panel">
+      <div class="panel-head">
+        <div class="panel-title">🔑 Hotfix </div>
+      </div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Computer Name</th><th>Caption</th><th>Description</th><th>Hotfix ID</th><th>Installed By</th><th>Installed On</th></tr></thead>
+          <tbody id="hotfix-tbody">$HotfixesFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User Deletion Activities $(New-FIIcon -Key "USER_DELETION_ACTIVITIES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>DeletedBy</th>
-                  <th>DeletedAccount</th>
-                </tr>
-              </thead>
-              <tbody>
-               $DeletedUsersFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">User LockOut Activities $(New-FIIcon -Key "USER_LOCKOUT_ACTIVITIES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>LockedOutAccount</th>
-                  <th>System</th>
-                </tr>
-              </thead>
-              <tbody>
-               $LockOutFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Credential Manager Backup Activity $(New-FIIcon -Key "CREDMAN_BACKUP_ACTIVITY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>BackupAccount</th>
-                  <th>AccountLogonType</th>
-                </tr>
-              </thead>
-              <tbody>
-               $CredManBackupFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📦 Installed Software <span class="panel-count" id="software-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter software..." oninput="filterTable('software-tbody', this.value, [0,1,2,3,4,5])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Name</th><th>Version</th><th>Publisher</th><th>Install Date</th><th>Install Location</th><th>Uninstall String</th></tr></thead>
+        <tbody id="software-tbody">$InstalledAppsFragment</tbody>
+      </table>
+    </div>
+  </div>
 
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Credential Manager Restore Activity $(New-FIIcon -Key "CREDMAN_RESTORE_ACTIVITY")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>RestoredAccount</th>
-                  <th>AccountLogonType</th>
-                </tr>
-              </thead>
-              <tbody>
-               $CredManRestoreFragment
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
 
-  $Style_Footer
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📦 Windows Defender Status <span class="panel-count" id="defender-count">0</span></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>AM Product Version</th><th>AM Running Mode</th><th>AM Service Enabled</th><th>Antispyware Enabled</th><th>Antispyware Signature LastUpdated</th><th>Antivirus Enabled</th><th>Antivirus Signature LastUpdated</th><th>Behavior Monitor Enabled</th><th>Defender Signatures OutOfDate</th><th>Device Control Policies LastUpdated</th><th>Device Control State</th><th>NIS Signature LastUpdated</th><th>Quick Scan EndTime</th><th>RealTime Protection Enabled</th></tr></thead>
+        <tbody id="defender-tbody">$WinDefenderFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+</div><!-- /system -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: PROCESSES
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-processes">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Running Processes</div>
+      <div class="view-sub">All processes active at time of collection — flagged items lack a path or match known-bad names</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">⚙ Process List <span class="panel-count" id="procs-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by PID, name, path, company..." oninput="filterTable('procs-tbody', this.value, [0,1,2,3,4,5,6,7,8,9,10])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr>
+            <th>Name</th><th>PID</th><th>Parent PID</th><th>User</th><th>Path</th>
+            <th>Command Line</th><th>CPU (s)</th><th>RAM (MB)</th><th>Start Time</th><th>Signature</th>
+          </tr>
+        </thead>
+        <tbody id="procs-tbody">$ProcessFragmentrows</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">⚙ Startup Programs <span class="panel-count" id="startup-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, command, location, user..." oninput="filterTable('startup-tbody', this.value, [0,1,2,3])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr>
+            <th>Name</th><th>Command</th><th>Location</th><th>User</th>
+          </tr>
+        </thead>
+        <tbody id="startup-tbody">$StartupProgsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+
+
+
+</div><!-- /processes -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: NETWORK
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-network">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Network</div>
+      <div class="view-sub">Active connections, listening ports, DNS cache, ARP table</div>
+    </div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-card" style="--accent:var(--blue)" onclick="document.getElementById('net-connections').scrollIntoView()">
+      <div class="stat-num" id="net-established-count">0</div>
+      <div class="stat-label">Established</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--low)" onclick="document.getElementById('net-listen').scrollIntoView()">
+      <div class="stat-num" id="net-listen-count">0</div>
+      <div class="stat-label">Listening</div>
+    </div>
+    <div class="stat-card" style="--accent:var(--crit)" id="net-external-card">
+      <div class="stat-num" id="net-external-count">0</div>
+      <div class="stat-label">External Connections</div>
+    </div>
+  </div>
+
+  <div class="panel" id="net-connections">
+    <div class="panel-head">
+      <div class="panel-title">🌐 TCP Connections <span class="panel-count" id="net-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by IP, port, process, state..." oninput="filterTable('net-tbody', this.value, [0,1,2,3,4,5,6])"/>
+      </div>
+      <div class="hits-lbl" id="net-hits"></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr>
+            <th>Local Addr</th><th>L.Port</th><th>Remote Addr</th>
+            <th>R.Port</th><th>State</th><th>PID</th><th>Process</th>
+          </tr>
+        </thead>
+        <tbody id="net-tbody">$NetTCPConnectFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel" id="net-ipconfig">
+      <div class="panel-head"><div class="panel-title">👂 Listening Ports</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Local Port</th><th>Protocol</th><th>PID</th><th>Process</th></tr></thead>
+          <tbody id="listen-tbody">$NetListenFragment</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">🗃 DNS Cache (Top 50)</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Entry</th><th>Name</th><th>Status</th><th>TTL</th><th>Data</th></tr></thead>
+          <tbody id="dns-tbody">$DNSCacheFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+
+  <div class="grid-2">
+    <div class="panel" id="net-connection-profile">
+      <div class="panel-head"><div class="panel-title">👂 IP Configuration</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Description</th><th>MAC Address</th><th>DNS Domain</th><th>DNS HostName</th><th>DHCP Enabled</th><th>Service Name</th></tr></thead>
+          <tbody id="ipconfig-tbody">$IPConfigurationFragment</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">🗃 Net IP Address</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Name</th><th>Interface Alias</th><th>Network Category</th><th>IPv4</th><th>IPv6</th></tr></thead>
+          <tbody id="net-ip-tbody">$NetIPAddressFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+
+    <div class="grid-2">
+    <div class="panel" id="net-neighbor">
+      <div class="panel-head"><div class="panel-title">👂 IP Configuration</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Name</th><th>Interface Alias</th><th>Network Category</th><th>IPv4 Connectivity</th><th>IPv6 Connectivity</th></tr></thead>
+          <tbody id="net-profile-tbody">$NetConnectProfileFragment</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">🗃 Net IP Address</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Name</th><th>Interface Description</th><th>Status</th><th>MAC Address</th><th>Link Speed</th></tr></thead>
+          <tbody id="net-adapter-tbody">$NetAdapterFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+
+
+    <div class="grid-2">
+    <div class="panel" id="net-listen">
+      <div class="panel-head"><div class="panel-title">👂 Net Neigbour</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Interface Alias</th><th>IP Address</th><th>Link Layer Address</th></tr></thead>
+          <tbody id="neighbor-tbody">$NetNeighborFragment</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">🗃 WIFI Passwords</div></div>
+      <div class="tbl-wrap">
+        <table class="std">
+          <thead><tr><th>Profile Name</th><th>Password</th></tr></thead>
+          <tbody id="wlan-tbody">$WlanPasswordsFragment</tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+
+
+
+
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 Network Shares</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Description</th><th>Path</th><th>Volume</th></tr></thead>
+        <tbody id="shares-tbody">$SMBSharesFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 Network Adapters</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Adapter Type</th><th>Product Name</th><th>Description</th><th>MAC</th><th>Availability</th><th>Status</th><th>Enabled</th><th>Physical Adapter</th></tr></thead>
+        <tbody id="network-adapter-tbody">$NetworkAdapterFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+   <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 Firewall Rules</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Name</th><th>Display Name</th><th>Description</th><th>Direction</th><th>Action</th><th>Edge Traversal Policy</th><th>Owner</th><th>Enforcement Status</th></tr></thead>
+        <tbody id="firewall-tbody">$FirewallRuleFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 Outbound SMB Sessions</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Local Address</th><th>Local Port</th><th>Remote Address</th><th>Remote Port</th><th>State</th><th>Applied Settings</th><th>Owning Process</th></tr></thead>
+        <tbody id="outbound-smb-tbody">$outboundSmbSessionsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 All SMB Sessions</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Session ID</th><th>Client Computer Name</th><th>Client Username</th><th>NumOpens</th></tr></thead>
+        <tbody id="smb-sessions-tbody">$SMBSessionsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 Network Hops</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>If Index</th><th>Destination Prefix</th><th>Next Hop</th><th>Route Metric</th><th>Interface Metric</th><th>Interface Alias</th></tr></thead>
+        <tbody id="net-hops-tbody">$NetHopsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 Adapter Hops</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Name</th><th>Interface Description</th><th>If Index</th><th>Status</th><th>MAC Address</th><th>Link Speed</th></tr></thead>
+        <tbody id="adapter-hops-tbody">$AdaptHopsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><div class="panel-title">📡 IP Hops</div></div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>If Index</th><th>Destination Prefix</th><th>Next Hop</th><th>Route Metric</th><th>Interface Metric</th><th>Interface Alias</th></tr></thead>
+        <tbody id="ip-hops-tbody">$IpHopsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+</div><!-- /network -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: SERVICES
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-services">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Services</div>
+      <div class="view-sub">All installed services with state and startup type</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">⚡ Service List <span class="panel-count" id="svc-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, state, startup type, path..." oninput="filterTable('svc-tbody', this.value, [0,1,2,3,4,5,6,7])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr>
+            <th>Name</th><th>Display Name</th><th>State</th>
+            <th>Startup</th><th>Start Name</th><th>Command</th><th>Path</th><th>Description</th>
+          </tr>
+        </thead>
+        <tbody id="svc-tbody">$ServicesFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+</div><!-- /services -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: SCHEDULED TASKS
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-scheduled">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Scheduled Tasks</div>
+      <div class="view-sub">Tasks registered on this host — non-Microsoft tasks highlighted</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📅 Task List <span class="panel-count" id="tasks-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter tasks..." oninput="filterTable('tasks-tbody', this.value, [0,1,2,3,4,5,6,7])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr>
+            <th>Task Name</th><th>Task Path</th><th>State</th><th>Principle</th><th>Actions</th><th>Last Run</th>
+            <th>Next Run</th><th>Last Result</th>
+          </tr>
+        </thead>
+        <tbody id="tasks-tbody">$ScheduledTasksFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+
+
+</div><!-- /scheduled -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: EVENT LOG
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-eventlog">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Event Log Analysis</div>
+      <div class="view-sub">Logon events, account changes, process creation, object access</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">📊 Events by Category</div></div>
+      <div class="bar-chart" id="evtlog-category-bars"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><div class="panel-title">📊 Top Event IDs</div></div>
+      <div class="bar-chart" id="evtlog-evid-bars"></div>
+    </div>
+  </div>
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Group Enumeration <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Performed On</th>
+            <th>Performed By</th><th>Logon Type</th><th>PID</th><th>Performed</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$GroupMembershipFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 RDP Logins <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Event ID</th><th>Type</th>
+            <th>Time</th><th>Logon User</th><th>Logon User Domain</th><th>Logon IP</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$RDPLoginsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 RDP Auths <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time Created</th>
+            <th>User</th><th>Domain</th><th>Client</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$RDPAuthsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Outgoing RDP Connections <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Local User</th>
+            <th>Target Host</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$OutRDPFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Created Users <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Created User</th>
+            <th>Actioned By</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$CreatedUsersFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Password Resets <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Target User</th>
+            <th>Actioned By</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$PassResetFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Added users to Group <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Added By</th><th>Group</th><th>Target User</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$AddedUsersFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Enabled Users <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Enabled By</th>
+            <th>Enabled User</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$EnabledUsersFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Disabled Users <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Disabled By</th>
+            <th>Disabled User</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$DisabledUsersFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Deleted Users <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Deleted By</th>
+            <th>Deleted User</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$DeletedUsersFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Locked Out Users <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Locked Out User</th>
+            <th>System</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$LockOutFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Credential Manager Backup <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Actioned By</th>
+            <th>Logon ID</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$CredManBackupFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Credential Manager Restore <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Restored Account</th>
+            <th>Credential Manager Restore Account</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$CredManRestoreFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Logon Events <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>User</th>
+            <th>Logon Type</th><th>Source Network Address</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$logonEventsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Failed Logon Events <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>User</th>
+            <th>Logon Type</th><th>Source Network Address</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$logonEventsFailedFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Object Access Events <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>Event ID</th>
+            <th>User</th><th>Domain</th><th>Object Name</th><th>Object Type</th><th>Access Label</th><th>Process</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$ObjectHtmlTable1</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <!-- Discover-style event table -->
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📋 Process Execution Events <span class="panel-count" id="evtlog-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="evtlog-search"
+               placeholder="Search by event ID, user, process, message..."
+               oninput="renderEventLog(this.value)"/>
+      </div>
+      <div class="hits-lbl" id="evtlog-hits"></div>
+    </div>
+    <div class="filter-row" id="evtlog-filters"></div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th>Time</th><th>User</th>
+            <th>Domain</th><th>Process Name</th><th>Process ID</th><th>Parent Name</th><th>Parent ID</th><th>Command Line</th>
+          </tr>
+        </thead>
+        <tbody id="evtlog-tbody">$ObjectHtmlTable2</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+</div><!-- /eventlog -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: BROWSER HISTORY
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-browser">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Browser History</div>
+      <div class="view-sub">Chrome, Firefox, Edge, IE history — IOC matches flagged in red</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🌍 Visited URLs <span class="panel-count" id="browser-count">0</span></div>
+      <div class="panel-actions">
+        <button class="btn" onclick="filterBrowser('ioc')">🔴 Show IOC Only</button>
+        <button class="btn" onclick="filterBrowser('all')">Show All</button>
+      </div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Search URL, title, browser..." oninput="filterTable('browser-tbody', this.value, [0,1,2,3])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead>
+          <tr><th>User</th><th>Browser</th><th>Profile</th><th>URL</th><th>Last Visit</th><th>IOC</th></tr>
+        </thead>
+        <tbody id="browser-tbody">$($script:BrowserFragmentRows)</tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /browser -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: FILES & USB
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-files">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Files &amp; USB Devices</div>
+      <div class="view-sub">Recently created files, executables in suspicious paths, USB history</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🔌 USB Devices <span class="panel-count" id="usb-count">0</span></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Friendly Name</th><th>Driver</th><th>MFG</th><th>Device Description</th></tr></thead>
+        <tbody id="usb-tbody">$USBDevicesFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🔌 Image Devices <span class="panel-count" id="image-count">0</span></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Caption</th><th>Manufacturer</th><th>Status</th><th>Present</th></tr></thead>
+        <tbody id="image-tbody">$ImagedeviceFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🔌 UPNP Devices <span class="panel-count" id="upnp-count">0</span></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Status</th><th>Class</th><th>Friendly Name</th><th>Instance ID</th></tr></thead>
+        <tbody id="upnp-tbody">$UPNPDevicesFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+    <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🔌 Unknown Drives <span class="panel-count" id="unknown-drives-count">0</span></div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Friendly Name</th><th>Manufacturer</th><th>Serial Number</th><th>Last Write Time</th></tr></thead>
+        <tbody id="unknown-drives-tbody">$UnknownDrivesFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Recent Files (180 days) <span class="panel-count" id="files-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, extension..." oninput="filterTable('files-tbody', this.value, [0,1,2])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Extension</th><th>Path</th><th>Modified</th><th>Size (KB)</th></tr></thead>
+        <tbody id="files-tbody">$NewFiles</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Link Files <span class="panel-count" id="links-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, created..." oninput="filterTable('links-tbody', this.value, [0,1,2,3,4])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Target</th><th>Arguments</th><th>Last Access</th><th>Created</th></tr></thead>
+        <tbody id="links-tbody">$LinkFilesFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Executables in Downloads <span class="panel-count" id="downloads-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, created..." oninput="filterTable('downloads-tbody', this.value, [0,1,2,3,4,5])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Full Name</th><th>Creation Time</th><th>Last Access Time</th><th>Last Write Time</th><th>Attributes</th></tr></thead>
+        <tbody id="downloads-tbody">$DownloadsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Executables in User Temp Folders <span class="panel-count" id="hidden-1-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, created..." oninput="filterTable('hidden-1-tbody', this.value, [0,1,2,3,4,5])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Full Name</th><th>Creation Time</th><th>Last Access Time</th><th>Last Write Time</th><th>Attributes</th></tr></thead>
+        <tbody id="hidden-1-tbody">$HiddenExecs1Fragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Executables in System Temp Folders <span class="panel-count" id="hidden-2-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, created..." oninput="filterTable('hidden-2-tbody', this.value, [0,1,2,3,4,5])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Full Name</th><th>Creation Time</th><th>Last Access Time</th><th>Last Write Time</th><th>Attributes</th></tr></thead>
+        <tbody id="hidden-2-tbody">$HiddenExecs2Fragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Executables in Perflogs <span class="panel-count" id="hidden-3-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, created..." oninput="filterTable('hidden-3-tbody', this.value, [0,1,2,3,4,5])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Full Name</th><th>Creation Time</th><th>Last Access Time</th><th>Last Write Time</th><th>Attributes</th></tr></thead>
+        <tbody id="hidden-3-tbody">$HiddenExecs3Fragment</tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 Executables in User Document Folder <span class="panel-count" id="hidden-4-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by name, path, created..." oninput="filterTable('hidden-4-tbody', this.value, [0,1,2,3,4,5])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>File Name</th><th>Full Name</th><th>Creation Time</th><th>Last Access Time</th><th>Last Write Time</th><th>Attributes</th></tr></thead>
+        <tbody id="hidden-4-tbody">$HiddenExecs4Fragment</tbody>
+      </table>
+    </div>
+  </div>
+
+    <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 PowerShell History <span class="panel-count" id="ps-history-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by user, command..." oninput="filterTable('ps-history-tbody', this.value, [0,1])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>User</th><th>Command</th></tr></thead>
+        <tbody id="ps-history-tbody">$PSHistoryFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+    <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">📄 BitLocker Key <span class="panel-count" id="bitlocker-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by mount point, status, protector, key..." oninput="filterTable('bitlocker-tbody', this.value, [0,1,2,3,4,5,6,7,8,9])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Mount Point</th><th>Volume Type</th><th>Volume Status</th><th>Encryption Method</th><th>Encryption PCT</th><th>Protection Status</th><th>Lock Status</th><th>Protector Type</th><th>Protector ID</th><th>Key</th></tr></thead>
+        <tbody id="bitlocker-tbody">$BitLockerFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+</div><!-- /files -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: EXTRAS
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-extras">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">Extras</div>
+      <div class="view-sub">Browsable artifact folders (RAM, PCAP, browser exports, logs)</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">🧰 Artifact Browser <span class="panel-count" id="extras-count">0</span></div>
+    </div>
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" placeholder="Filter by artifact, folder, status..." oninput="filterTable('extras-tbody', this.value, [0,1,3,4])"/>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table class="std">
+        <thead><tr><th>Artifact</th><th>Folder</th><th>Browse</th><th>Status</th><th>Files</th></tr></thead>
+        <tbody id="extras-tbody">$ExtrasArtifactsFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /extras -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: DETECTIONS  (Sigma / Rules — Discover style)
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-detections">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">🚨 Sigma / Rule Detections</div>
+      <div class="view-sub">Events matched against detection rules and config.json bad-actor lists</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">
+        <span style="background:#1d4ed8;width:22px;height:22px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:900;color:#fff;margin-right:4px">Σ</span>
+        Detection Engine — Live Forensicator
+      </div>
+    </div>
+
+    <!-- Severity filter pills -->
+    <div class="filter-row" id="det-filter-row"></div>
+
+    <div class="search-bar">
+      <div class="search-wrap">
+        <span class="search-ico">⌕</span>
+        <input type="text" id="det-search"
+               placeholder="Search rule, user, process, command, tags..."
+               oninput="renderDetections()"/>
+      </div>
+      <div class="hits-lbl" id="det-hits"></div>
+    </div>
+
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th></th><th>Time</th><th>Rule Level</th><th>Rule Title</th>
+            <th>Event ID</th><th>Username</th><th>Process Name</th>
+          </tr>
+        </thead>
+        <tbody id="det-tbody">$script:SigmaDetectionRows</tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /detections -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: HASH MATCHES
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-hashes">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">🦠 Malicious Hash Matches</div>
+      <div class="view-sub">Executables whose SHA256 hash matched abuse.ch or config hash lists</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">Hash Match Results <span class="panel-count" id="hash-count">0</span></div>
+    </div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th></th><th>Detected File</th><th>Extension</th><th>File Size (KB)</th>
+            <th>MD5</th><th>SHA256</th><th>MD5 Matched</th><th>SHA256 Matched</th><th>Last Modified</th><th>Creation Time</th><th>Owner</th>
+          </tr>
+        </thead>
+        <tbody id="hash-tbody">$HashMatchFragment</tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /hashes -->
+
+<!-- ╔══════════════════════════════════════════════════════════════════════════
+     ║  VIEW: IOC MATCHES
+══════════════════════════════════════════════════════════════════════════ -->
+<div class="view" id="view-ioc">
+
+  <div class="view-header">
+    <div>
+      <div class="view-title">🔗 IOC Matches</div>
+      <div class="view-sub">URLs from browser history and web logs matched against IOC feed</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head">
+      <div class="panel-title">IOC URL Results <span class="panel-count" id="ioc-count">0</span></div>
+    </div>
+    <div class="disc-wrap">
+      <table class="disc">
+        <thead>
+          <tr>
+            <th></th><th>Time</th><th>Severity</th><th>URL</th>
+            <th>Browser</th><th>IOC Source</th><th>User</th>
+          </tr>
+        </thead>
+        <tbody id="ioc-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /ioc -->
+
+</main><!-- /main -->
+
+<template id="forensicator-inline-runtime-disabled">
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ENGINE — all rendering logic below
+═══════════════════════════════════════════════════════════════════════════ */
+
+// severity config
+var SEV = {
+  critical:      { label:'CRITICAL', bg:'#ef4444', fg:'#fff' },
+  high:          { label:'HIGH',     bg:'#f97316', fg:'#fff' },
+  medium:        { label:'MEDIUM',   bg:'#eab308', fg:'#111' },
+  low:           { label:'LOW',      bg:'#22c55e', fg:'#111' },
+  informational: { label:'INFO',     bg:'#3b82f6', fg:'#fff' }
+};
+
+function sevCfg(lv) {
+  return SEV[(lv||'').toLowerCase()] || { label:(lv||'INFO').toUpperCase(), bg:'#555', fg:'#fff' };
+}
+
+function esc(s) {
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function sevBadge(lv) {
+  var c = sevCfg(lv);
+  return '<span class="sev" style="background:'+c.bg+';color:'+c.fg+'">'+esc(c.label)+'</span>';
+}
+
+/* ── NAV ────────────────────────────────────────────────────────────────────── */
+function nav(id) {
+  document.querySelectorAll('.view').forEach(function(v){ v.classList.remove('active'); });
+  document.querySelectorAll('.sb-link').forEach(function(l){ l.classList.remove('active'); });
+  var v = document.getElementById('view-'+id);
+  if (v) v.classList.add('active');
+  document.querySelectorAll('.sb-link').forEach(function(l){
+    if (l.getAttribute('onclick') && l.getAttribute('onclick').includes("'"+id+"'")) l.classList.add('active');
+  });
+  window.scrollTo(0,0);
+}
+
+/* ── TABLE FILTER ───────────────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════════
+   PAGINATION ENGINE
+   Usage:  initPagination(tbodyId, filterColIndexes, pageSize)
+   All existing  oninput="filterTable('xxx-tbody', ...)"  calls work unchanged —
+   filterTable checks the registry and delegates automatically.
+══════════════════════════════════════════════════════════════════════════════ */
+var _paginators = {};
+
+function PaginatedTable(tbodyId, filterCols, pageSize) {
+  this.id        = tbodyId;
+  this.cols      = filterCols || [];
+  this.pageSize  = pageSize   || 25;
+  this.page      = 1;
+  this.query     = '';
+  this.allRows   = [];
+  this.filtered  = [];
+  this.footerId  = tbodyId + '-pgbar';
+
+  this._readRows();
+  this._ensureBar();
+  this.render();
+}
+
+PaginatedTable.prototype._readRows = function () {
+  var tbody = document.getElementById(this.id);
+  this.allRows = [];
+  if (!tbody) return;
+
+  var rows = Array.from(tbody.children).filter(function (node) {
+    return node.tagName && node.tagName.toLowerCase() === 'tr';
+  });
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i];
+    if (row.classList.contains('d-detail')) continue;
+    if (isPlaceholderRow(row)) continue;
+
+    var item = { row: row, detail: null };
+    if (row.classList.contains('d-row') && rows[i + 1] && rows[i + 1].classList.contains('d-detail')) {
+      item.detail = rows[i + 1];
+      i++;
+    }
+    this.allRows.push(item);
+  }
+};
+
+PaginatedTable.prototype._ensureBar = function () {
+  if (document.getElementById(this.footerId)) return;
+  var tbody = document.getElementById(this.id);
+  if (!tbody) return;
+  var wrap  = tbody.closest('.tbl-wrap') || tbody.closest('.disc-wrap');
+  var panel = tbody.closest('.panel');
+  var bar   = document.createElement('div');
+  bar.id        = this.footerId;
+  bar.className = 'pg-bar';
+  if (wrap) {
+    /* insert bar after the wrap div, stays inside the panel */
+    wrap.parentNode.insertBefore(bar, wrap.nextSibling);
+  } else if (panel) {
+    /* no tbl-wrap / disc-wrap — append to panel */
+    panel.appendChild(bar);
+  }
+  /* else: no suitable container — skip gracefully (no crash) */
+};
+
+PaginatedTable.prototype.filter = function (q) {
+  this.query = q;
+  this.page  = 1;
+  this.render();
+};
+
+PaginatedTable.prototype.goPage = function (p) {
+  this.page = p;
+  this.render();
+  var tbody = document.getElementById(this.id);
+  if (tbody) {
+    var panel = tbody.closest('.panel');
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+};
+
+PaginatedTable.prototype.setPageSize = function (n) {
+  this.pageSize = n;
+  this.page     = 1;
+  this.render();
+};
+
+PaginatedTable.prototype.reload = function () {
+  this._readRows();
+  this.page = 1;
+  this.render();
+};
+
+PaginatedTable.prototype.render = function () {
+  var q    = this.query.toLowerCase();
+  var cols = this.cols;
+
+  this.filtered = this.allRows.filter(function (item) {
+    if (!q) return true;
+    var tds = item.row.querySelectorAll('td');
+    return cols.map(function (i) {
+      return tds[i] ? tds[i].innerText : '';
+    }).join(' ').toLowerCase().indexOf(q) !== -1;
+  });
+
+  var total = this.filtered.length;
+  var pages = Math.max(1, Math.ceil(total / this.pageSize));
+  if (this.page > pages) this.page = pages;
+
+  var start = (this.page - 1) * this.pageSize;
+  var end   = start + this.pageSize;
+
+  this.allRows.forEach(function (item) {
+    item.row.style.display = 'none';
+    if (item.detail) item.detail.style.display = 'none';
+  });
+  this.filtered.forEach(function (item, i) {
+    var isVisible = i >= start && i < end;
+    item.row.style.display = isVisible ? '' : 'none';
+    if (item.detail) {
+      item.detail.style.display = isVisible && item.detail.dataset.expanded === 'true' ? 'table-row' : 'none';
+    }
+  });
+
+  this._renderBar(total, pages, start, end);
+  syncLiveBadge(this.id, total);
+};
+
+PaginatedTable.prototype._renderBar = function (total, pages, start, end) {
+  var bar = document.getElementById(this.footerId);
+  if (!bar) return;
+  if (total === 0) { bar.innerHTML = ''; return; }
+
+  var self = this;
+  var html = '<div class="pg-info">Showing '
+    + (start + 1) + '–' + Math.min(end, total)
+    + ' of ' + total + ' rows</div>';
+
+  html += '<div class="pg-controls">';
+  html += '<select class="pg-select" onchange="_paginators[\'' + this.id + '\'].setPageSize(+this.value);this.blur()">';
+  [25, 50, 100, 250].forEach(function (n) {
+    html += '<option value="' + n + '"' + (n === self.pageSize ? ' selected' : '') + '>' + n + ' / page</option>';
+  });
+  html += '</select>';
+
+  html += '<button class="pg-btn" ' + (this.page <= 1 ? 'disabled' : '')
+        + ' onclick="_paginators[\'' + this.id + '\'].goPage(' + (this.page - 1) + ')">‹</button>';
+
+  this._pageRange(pages).forEach(function (p) {
+    if (p === '…') {
+      html += '<span class="pg-ellipsis">…</span>';
+    } else {
+      html += '<button class="pg-btn' + (p === self.page ? ' pg-active' : '') + '"'
+            + ' onclick="_paginators[\'' + self.id + '\'].goPage(' + p + ')">' + p + '</button>';
+    }
+  });
+
+  html += '<button class="pg-btn" ' + (this.page >= pages ? 'disabled' : '')
+        + ' onclick="_paginators[\'' + this.id + '\'].goPage(' + (this.page + 1) + ')">›</button>';
+
+  html += '</div>';
+  bar.innerHTML = html;
+};
+
+PaginatedTable.prototype._pageRange = function (pages) {
+  if (pages <= 7) {
+    var r = [];
+    for (var i = 1; i <= pages; i++) r.push(i);
+    return r;
+  }
+  var p   = this.page;
+  var out = [1];
+  if (p > 3)          out.push('…');
+  for (var i = Math.max(2, p - 1); i <= Math.min(pages - 1, p + 1); i++) out.push(i);
+  if (p < pages - 2)  out.push('…');
+  out.push(pages);
+  return out;
+};
+
+function initPagination(tbodyId, filterCols, pageSize) {
+  try {
+    _paginators[tbodyId] = new PaginatedTable(tbodyId, filterCols, pageSize || 25);
+  } catch(e) { console.error('[Forensicator] initPagination failed:', tbodyId, e); }
+}
+
+/* ── TABLE FILTER — routes through paginator if registered ───────────────── */
+function filterTable(tbodyId, q, cols) {
+  if (_paginators[tbodyId]) {
+    _paginators[tbodyId].filter(q);
+    return;
+  }
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  var count = 0;
+  tbody.querySelectorAll('tr').forEach(function (r) {
+    var tds  = r.querySelectorAll('td');
+    var text = cols.map(function (i) { return tds[i] ? tds[i].innerText : ''; })
+                   .join(' ').toLowerCase();
+    var show = !q || text.indexOf(q.toLowerCase()) !== -1;
+    r.style.display = show ? '' : 'none';
+    if (show) count++;
+  });
+  syncLiveBadge(tbodyId, count);
+  return count;
+}
+
+function getLinkedCountId(tbodyId) {
+  if (!tbodyId || tbodyId.slice(-6) !== '-tbody') return null;
+  return tbodyId.slice(0, -6) + '-count';
+}
+
+function setCountBadge(countId, countValue) {
+  var badge = document.getElementById(countId);
+  if (badge) badge.textContent = countValue;
+}
+
+function isPlaceholderRow(row) {
+  if (!row) return true;
+  if (row.classList.contains('d-detail')) return true;
+  var cells = row.querySelectorAll('td');
+  if (!cells.length) return true;
+  if (cells.length === 1 && cells[0].hasAttribute('colspan')) return true;
+  var txt = (row.textContent || '').trim().toLowerCase();
+  return !txt || txt === 'no data' || txt === 'no data available' || txt.indexOf('no matches found') !== -1 || txt.indexOf('hash lookup skipped') !== -1 || txt.indexOf('not collected') === 0;
+}
+
+function refreshPagination(tbodyId) {
+  if (_paginators[tbodyId]) {
+    _paginators[tbodyId].reload();
+    return;
+  }
+  var countId = getLinkedCountId(tbodyId);
+  if (countId) syncCount(tbodyId, countId);
+}
+
+function syncLiveBadge(tbodyId, countValue) {
+  var countId = getLinkedCountId(tbodyId);
+  if (countId) setCountBadge(countId, countValue);
+  if (tbodyId === 'net-tbody' || tbodyId === 'listen-tbody') {
+    syncNetworkCards(true);
+  }
+}
+
+function getDataRows(tbody) {
+  if (!tbody) return [];
+  return Array.from(tbody.querySelectorAll('tr')).filter(function (row) {
+    return !isPlaceholderRow(row) && !row.classList.contains('d-detail');
+  });
+}
+
+function getVisibleDataRows(tbody) {
+  return getDataRows(tbody).filter(function (row) {
+    return row.style.display !== 'none';
+  });
+}
+
+
+/* ── AUTO-COUNT ── reads any tbody and updates its panel-count badge ── */
+function syncCount(tbodyId, countId) {
+  var tbody = document.getElementById(tbodyId);
+  var badge = document.getElementById(countId);
+  if (!tbody || !badge) return;
+  badge.textContent = getDataRows(tbody).length;
+}
+
+function isExternalIp(ip) {
+  var value = String(ip || '').trim().toLowerCase();
+  if (!value || value === '*' || value === '::' || value === '0.0.0.0') return false;
+  if (value === '::1' || value.indexOf('127.') === 0) return false;
+  if (value.indexOf('10.') === 0 || value.indexOf('192.168.') === 0 || value.indexOf('169.254.') === 0) return false;
+  if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(value)) return false;
+  if (value.indexOf('fe80:') === 0 || value.indexOf('fc') === 0 || value.indexOf('fd') === 0) return false;
+  if (value === 'localhost') return false;
+  return true;
+}
+
+function syncNetworkCards(visibleOnly) {
+  var picker = visibleOnly ? getVisibleDataRows : getDataRows;
+  var netRows = picker(document.getElementById('net-tbody'));
+  var listenRows = picker(document.getElementById('listen-tbody'));
+
+  var established = netRows.filter(function (row) {
+    var cells = row.querySelectorAll('td');
+    return cells[4] && String(cells[4].textContent || '').trim().toLowerCase() === 'established';
+  }).length;
+
+  var external = netRows.filter(function (row) {
+    var cells = row.querySelectorAll('td');
+    return cells[2] && isExternalIp(cells[2].textContent);
+  }).length;
+
+  var establishedEl = document.getElementById('net-established-count');
+  var listenEl = document.getElementById('net-listen-count');
+  var externalEl = document.getElementById('net-external-count');
+
+  if (establishedEl) establishedEl.textContent = established;
+  if (listenEl) listenEl.textContent = listenRows.length;
+  if (externalEl) externalEl.textContent = external;
+}
+
+function normalizeEventLogPanels() {
+  var panels = Array.from(document.querySelectorAll('#view-eventlog .panel')).filter(function (panel) {
+    return !!panel.querySelector('tbody[id="evtlog-tbody"]');
+  });
+
+  panels.forEach(function (panel, idx) {
+    var prefix = 'evtlog-' + (idx + 1);
+    var tbody = panel.querySelector('tbody[id="evtlog-tbody"]');
+    var count = panel.querySelector('span[id="evtlog-count"]');
+    var search = panel.querySelector('input[id="evtlog-search"]');
+    var hits = panel.querySelector('div[id="evtlog-hits"]');
+    var filters = panel.querySelector('div[id="evtlog-filters"]');
+
+    if (!tbody) return;
+
+    tbody.id = prefix + '-tbody';
+
+    if (count) count.id = prefix + '-count';
+    if (hits) hits.id = prefix + '-hits';
+    if (filters) {
+      filters.id = prefix + '-filters';
+      filters.innerHTML = '';
+    }
+
+    if (search) {
+      search.id = prefix + '-search';
+      search.setAttribute('oninput', "filterTable('" + tbody.id + "', this.value, [0,1,2,3,4,5,6,7,8])");
+    }
+
+    initPagination(tbody.id, [0,1,2,3,4,5,6,7,8], 25);
+    if (count) syncCount(tbody.id, count.id);
+  });
+}
+
+
+/* ── DETECT RENDER ──────────────────────────────────────────────────────────── */
+var detActive = 'all';
+
+function buildDetFilters(data) {
+  var cnt = { all: data.length, critical:0, high:0, medium:0, low:0, informational:0 };
+  data.forEach(function(d){ var lv=(d.RuleLevel||'informational').toLowerCase(); if(cnt[lv]!==undefined) cnt[lv]++; });
+  var pills = [
+    ['all','All',cnt.all,'#3b82f6','rgba(59,130,246,.15)'],
+    ['critical','Critical',cnt.critical,'#ef4444','rgba(239,68,68,.15)'],
+    ['high','High',cnt.high,'#f97316','rgba(249,115,22,.15)'],
+    ['medium','Medium',cnt.medium,'#eab308','rgba(234,179,8,.15)'],
+    ['low','Low',cnt.low,'#22c55e','rgba(34,197,94,.15)'],
+    ['informational','Info',cnt.informational,'#3b82f6','rgba(59,130,246,.15)']
+  ];
+  return pills.map(function(p){
+    var isA = detActive===p[0];
+    return '<div class="f-pill" style="border-color:'+p[3]+';background:'+(isA?p[4]:'transparent')+';color:'+p[3]+'" onclick="setDetLevel(\''+p[0]+'\')">'
+      +'<span class="f-num">'+p[2]+'</span> '+p[1]+'</div>';
+  }).join('');
+}
+
+function setDetLevel(lv) {
+  detActive = lv;
+  renderDetections();
+}
+
+function renderDiscoverTable(data, tbodyId, searchId, hitsId, filterRowId, allData) {
+  var q = searchId ? (document.getElementById(searchId)||{value:''}).value.toLowerCase() : '';
+  var filtered = (allData||data).filter(function(d){
+    if (detActive!=='all' && (d.RuleLevel||'informational').toLowerCase()!==detActive) return false;
+    if (!q) return true;
+    return [d.RuleTitle,d.User,d.Process,d.CommandLine,d.RuleTags,String(d.EventId||'')]
+      .join(' ').toLowerCase().indexOf(q)!==-1;
+  });
+
+  if (filterRowId) {
+    var fr = document.getElementById(filterRowId);
+    if (fr) fr.innerHTML = buildDetFilters(allData||data);
+  }
+
+  if (hitsId) {
+    var h = document.getElementById(hitsId);
+    if (h) h.textContent = filtered.length+' hit'+(filtered.length!==1?'s':'');
+  }
+
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">'
+      +((allData||data).length===0?'✔':'🔍')+'</div><div class="empty-msg">'
+      +((allData||data).length===0?'No findings on this host.':'No results match the current filter.')
+      +'</div></div></td></tr>';
+    return;
+  }
+
+  var rows = [];
+  filtered.forEach(function(d,i){
+    var uid = tbodyId+'-'+i;
+    var c = sevCfg(d.RuleLevel);
+    var procFull = String(d.Process||'N/A');
+    var procSh = procFull.length>52 ? '&hellip;'+esc(procFull.slice(-52)) : esc(procFull);
+    rows.push(
+      '<tr class="d-row" style="border-left:3px solid '+c.bg+'" onclick="toggleDRow(\''+uid+'\')">'
+      +'<td class="d-expand" id="ico-'+uid+'">▶</td>'
+      +'<td class="d-time">'+esc(d.TimeCreated)+'</td>'
+      +'<td>'+sevBadge(d.RuleLevel)+'</td>'
+      +'<td class="d-rule"><strong>'+esc(d.RuleTitle)+'</strong></td>'
+      +'<td class="d-evid">'+esc(String(d.EventId||''))+'</td>'
+      +'<td class="d-user">'+esc(d.User||'N/A')+'</td>'
+      +'<td class="d-proc" title="'+esc(procFull)+'">'+procSh+'</td>'
+      +'</tr>'
+    );
+    rows.push(
+      '<tr id="det-'+uid+'" class="d-detail" style="display:none">'
+      +'<td colspan="7"><div class="kv-panel"><table>'
+      +kv('rule.title',d.RuleTitle)+kv('rule.level',d.RuleLevel)
+      +kv('rule.tags',d.RuleTags)+kv('rule.file',d.RuleFile)
+      +kv('event.id',d.EventId)+kv('event.log_name',d.LogName)
+      +kv('@timestamp',d.TimeCreated)+kv('user.name',d.User)
+      +kv('process.executable',d.Process)+kvCode('process.command_line',d.CommandLine)
+      +'</table></div></td></tr>'
+    );
+  });
+  tbody.innerHTML = rows.join('');
+}
+
+function kv(k,v){ return '<tr><td class="kv-k">'+esc(k)+'</td><td class="kv-v">'+esc(String(v==null?'N/A':v))+'</td></tr>'; }
+function kvCode(k,v){ return '<tr><td class="kv-k">'+esc(k)+'</td><td class="kv-v"><code>'+esc(String(v==null?'N/A':v))+'</code></td></tr>'; }
+
+window.toggleDRow = function(uid) {
+  var det = document.getElementById('det-'+uid);
+  var ico = document.getElementById('ico-'+uid);
+  if (!det) return;
+  var open = det.style.display==='none'||!det.style.display;
+  det.dataset.expanded = open ? 'true' : 'false';
+  det.style.display = open ? 'table-row' : 'none';
+  ico.innerHTML = open ? '▼' : '▶';
+};
+
+function renderDetections() {
+  renderDiscoverTable(SIGMA_DATA, 'det-tbody', 'det-search', 'det-hits', 'det-filter-row', SIGMA_DATA);
+  refreshPagination('det-tbody');
+}
+
+/* ── EVENT LOG RENDER ───────────────────────────────────────────────────────── */
+var evtLogActive = 'all';
+
+function renderEventLog(q) {
+  var source = (typeof SAMPLE_EVTLOG_DATA !== 'undefined' && Array.isArray(SAMPLE_EVTLOG_DATA)) ? SAMPLE_EVTLOG_DATA : null;
+  if (!source) {
+    var existingRows = document.querySelectorAll('#evtlog-tbody tr.d-row').length;
+    var hitsEl = document.getElementById('evtlog-hits');
+    var countEl = document.getElementById('evtlog-count');
+    if (hitsEl) hitsEl.textContent = existingRows + ' events';
+    if (countEl) countEl.textContent = existingRows;
+    return;
+  }
+
+  var filtered = source.filter(function(e){
+    if (evtLogActive!=='all' && e.Category!==evtLogActive) return false;
+    if (!q) return true;
+    return [String(e.EventId),e.User,e.Category,e.Message].join(' ').toLowerCase().indexOf(q.toLowerCase())!==-1;
+  });
+
+  document.getElementById('evtlog-hits').textContent = filtered.length+' events';
+  document.getElementById('evtlog-count').textContent = filtered.length;
+
+  // Build category filter
+  var cats = {};
+  source.forEach(function(e){ cats[e.Category]=(cats[e.Category]||0)+1; });
+  var catColors = { 'Logon':'#3b82f6','Process Creation':'#f97316','Account Management':'#ef4444','Scheduled Task':'#eab308','Object Access':'#a855f7' };
+  var pills = '<div class="f-pill '+(evtLogActive==='all'?'active':'')+'" style="border-color:#3b82f6;color:#3b82f6" onclick="setEvtCat(\'all\')"><span class="f-num">'+source.length+'</span> All</div>';
+  Object.keys(cats).forEach(function(c){
+    var col = catColors[c]||'#94a3b8';
+    pills += '<div class="f-pill '+(evtLogActive===c?'active':'')+'" style="border-color:'+col+';color:'+col+'" onclick="setEvtCat(\''+c+'\')">'
+      +'<span class="f-num">'+cats[c]+'</span> '+c+'</div>';
+  });
+  document.getElementById('evtlog-filters').innerHTML = pills;
+
+  var rows = [];
+  filtered.forEach(function(e,i){
+    var uid = 'evtlog-'+i;
+    rows.push(
+      '<tr class="d-row" onclick="toggleDRow(\''+uid+'\')">'
+      +'<td class="d-expand" id="ico-'+uid+'">▶</td>'
+      +'<td class="d-time">'+esc(e.Time)+'</td>'
+      +'<td class="d-evid">'+esc(String(e.EventId))+'</td>'
+      +'<td><span style="font-size:11px;color:#94a3b8">'+esc(e.Category)+'</span></td>'
+      +'<td class="d-user">'+esc(e.User)+'</td>'
+      +'<td class="d-proc">'+esc(e.Computer)+'</td>'
+      +'<td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:#94a3b8">'+esc(e.Message)+'</td>'
+      +'</tr>'
+    );
+    rows.push(
+      '<tr id="det-'+uid+'" class="d-detail" style="display:none">'
+      +'<td colspan="7"><div class="kv-panel"><table>'
+      +kv('event.id',e.EventId)+kv('event.category',e.Category)
+      +kv('@timestamp',e.Time)+kv('user.name',e.User)
+      +kv('host.name',e.Computer)+kvCode('message',e.Message)
+      +'</table></div></td></tr>'
+    );
+  });
+  document.getElementById('evtlog-tbody').innerHTML = rows.join('');
+  refreshPagination('evtlog-tbody');
+
+  // Category bars
+  buildBars('evtlog-category-bars', cats, catColors);
+  // Event ID bars
+  var evids = {};
+  source.forEach(function(e){ var k='EID '+e.EventId; evids[k]=(evids[k]||0)+1; });
+  buildBars('evtlog-evid-bars', evids, {});
+}
+
+window.setEvtCat = function(c){ evtLogActive=c; renderEventLog(''); };
+
+/* ── BAR CHART BUILDER ──────────────────────────────────────────────────────── */
+function buildBars(containerId, data, colors) {
+  var el = document.getElementById(containerId);
+  if (!el) return;
+  var entries = Object.entries(data).sort(function(a,b){ return b[1]-a[1]; }).slice(0,8);
+  var max = entries.reduce(function(m,e){ return Math.max(m,e[1]); }, 1);
+  var defaultColors = ['#3b82f6','#f97316','#ef4444','#eab308','#22c55e','#a855f7','#ec4899','#14b8a6'];
+  el.innerHTML = entries.map(function(e,i){
+    var pct = Math.round(e[1]/max*100);
+    var col = colors[e[0]] || defaultColors[i%defaultColors.length];
+    return '<div class="bar-row">'
+      +'<div class="bar-label" title="'+esc(e[0])+'">'+esc(e[0])+'</div>'
+      +'<div class="bar-track"><div class="bar-fill" style="width:'+pct+'%;background:'+col+'"></div></div>'
+      +'<div class="bar-val">'+e[1]+'</div>'
+      +'</div>';
+  }).join('');
+}
+
+/* ── BROWSER FILTER ─────────────────────────────────────────────────────────── */
+window.filterBrowser = function(mode) {
+  var tbody = document.getElementById('browser-tbody');
+  var rows = document.querySelectorAll('#browser-tbody tr');
+  rows.forEach(function(r){
+    if (mode==='ioc') {
+      r.style.display = r.querySelector('.flag-cell') ? '' : 'none';
+    } else {
+      r.style.display = '';
+    }
+  });
+  syncLiveBadge('browser-tbody', getVisibleDataRows(tbody).length);
+};
+
+/* ── OVERVIEW BUILD ─────────────────────────────────────────────────────────── */
+function buildOverview() {
+  var totalDet = SIGMA_DATA.length + HASH_DATA.length + IOC_DATA.length;
+  var crits = SIGMA_DATA.filter(function(d){ return (d.RuleLevel||'').toLowerCase()==='critical'; }).length
+            + HASH_DATA.filter(function(d){ return (d.RuleLevel||'').toLowerCase()==='critical'; }).length;
+
+  // Stat row
+  var stats = [
+    { n: totalDet,          lbl:'Total Detections', accent:'var(--crit)',  view:'detections' },
+    { n: crits,             lbl:'Critical',         accent:'var(--crit)',  view:'detections' },
+    { n: SIGMA_DATA.length, lbl:'Sigma Hits',       accent:'var(--high)',  view:'detections' },
+    { n: HASH_DATA.length,  lbl:'Hash Matches',     accent:'var(--med)',   view:'hashes'     },
+    { n: IOC_DATA.length,   lbl:'IOC Matches',      accent:'var(--blue)',  view:'ioc'        }
+  ];
+  document.getElementById('overview-stats').innerHTML = stats.map(function(s){
+    return '<div class="stat-card" style="--accent:'+s.accent+'" onclick="nav(\''+s.view+'\')">'
+      +'<div class="stat-num">'+s.n+'</div>'
+      +'<div class="stat-label">'+s.lbl+'</div>'
+      +'</div>';
+  }).join('');
+
+  // Alert banners
+  var banners = '';
+  if (crits) banners += '<div class="alert-banner crit">🔴 <strong>'+crits+' CRITICAL</strong> finding'+(crits!==1?'s':'')+' detected — immediate review required.</div>';
+  if (SIGMA_DATA.filter(function(d){ return (d.RuleLevel||'').toLowerCase()==='high'; }).length)
+    banners += '<div class="alert-banner high">🟠 High-severity Sigma rule matches detected.</div>';
+  if (!totalDet) banners = '<div class="alert-banner info">✔ No detections found on this host.</div>';
+  document.getElementById('overview-alerts').innerHTML = banners;
+
+  // Severity bars
+  var sevCounts = {};
+  SIGMA_DATA.concat(HASH_DATA).concat(IOC_DATA).forEach(function(d){
+    var lv = (d.RuleLevel||'informational');
+    lv = lv.charAt(0).toUpperCase()+lv.slice(1);
+    sevCounts[lv] = (sevCounts[lv]||0)+1;
+  });
+  var sevColors = { Critical:'#ef4444',High:'#f97316',Medium:'#eab308',Low:'#22c55e',Informational:'#3b82f6' };
+  buildBars('sev-bars', sevCounts, sevColors);
+
+  // Sidebar badges
+  function showBadge(id, n) {
+    var b = document.getElementById('badge-'+id);
+    if (!b) return;
+    b.textContent = n;
+    b.classList.toggle('show', n > 0);
+  }
+  showBadge('detections', SIGMA_DATA.length);
+  showBadge('hashes',     HASH_DATA.length);
+  showBadge('ioc',        IOC_DATA.length);
+
+  // Top hits table is server-rendered from PowerShell ($sigmaFindings).
+}
+
+/* ── HASH & IOC TABLES ──────────────────────────────────────────────────────── */
+function renderSimpleDetectTable(data, tbodyId, countId, col4Label, col4Field) {
+  var count = document.getElementById(countId);
+  var tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+  if (count) count.textContent = data.length;
+  if (!data.length) {
+    if (tbody.querySelectorAll('tr').length) {
+      refreshPagination(tbodyId);
+      return;
+    }
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty"><div class="empty-icon">✔</div><div class="empty-msg">No matches found on this host.</div></div></td></tr>';
+    refreshPagination(tbodyId);
+    return;
+  }
+  var rows = [];
+  data.forEach(function(d,i){
+    var uid = tbodyId+'-'+i;
+    var c = sevCfg(d.RuleLevel);
+    rows.push(
+      '<tr class="d-row" style="border-left:3px solid '+c.bg+'" onclick="toggleDRow(\''+uid+'\')">'
+      +'<td class="d-expand" id="ico-'+uid+'">▶</td>'
+      +'<td class="d-time">'+esc(d.TimeCreated)+'</td>'
+      +'<td>'+sevBadge(d.RuleLevel)+'</td>'
+      +'<td class="d-rule"><strong>'+esc(d.RuleTitle)+'</strong></td>'
+      +'<td class="d-proc" style="max-width:300px">'+esc(d.Process||'')+'</td>'
+      +'<td class="d-proc" style="color:#94a3b8">'+esc(d.CommandLine||'')+'</td>'
+      +'<td style="font-size:11px;color:#94a3b8">'+esc(d.RuleFile||'')+'</td>'
+      +'</tr>'
+    );
+    rows.push(
+      '<tr id="det-'+uid+'" class="d-detail" style="display:none">'
+      +'<td colspan="7"><div class="kv-panel"><table>'
+      +kv('rule.title',d.RuleTitle)+kv('rule.level',d.RuleLevel)
+      +kv('@timestamp',d.TimeCreated)+kv('user.name',d.User)
+      +kv('process.executable',d.Process)+kvCode('details',d.CommandLine)
+      +kv('source',d.RuleFile)
+      +'</table></div></td></tr>'
+    );
+  });
+  tbody.innerHTML = rows.join('');
+  refreshPagination(tbodyId);
+}
+
+/* ── BOOT ─────────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', function() {
+  try { normalizeEventLogPanels(); } catch(e) { console.error('[Forensicator] normalizeEventLogPanels:', e); }
+  try { buildOverview(); } catch(e) { console.error('[Forensicator] buildOverview:', e); }
+  try { renderDetections(); } catch(e) { console.error('[Forensicator] renderDetections:', e); }
+  if (typeof SAMPLE_EVTLOG_DATA !== 'undefined' && Array.isArray(SAMPLE_EVTLOG_DATA) && SAMPLE_EVTLOG_DATA.length > 0) {
+    renderEventLog('');
+  }
+  renderSimpleDetectTable(HASH_DATA, 'hash-tbody', 'hash-count');
+  renderSimpleDetectTable(IOC_DATA,  'ioc-tbody',  'ioc-count');
+
+// Init pagination first -- reads all rows, hides beyond page 1
+  initPagination('det-tbody',            [1, 2, 3, 4, 5, 6],         25);
+  initPagination('hash-tbody',           [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 25);
+  initPagination('ioc-tbody',            [1, 2, 3, 4, 5, 6],         25);
+  initPagination('users-tbody',          [0, 1, 3, 6, 7, 8],         25);
+  initPagination('admins-tbody',         [0, 1, 2],                  25);
+  initPagination('groups-tbody',         [0, 1, 2, 3],               25);
+  initPagination('sessions-tbody',       [0, 1, 2, 3, 4],            25);
+  initPagination('history-tbody',        [0, 1, 2],                  25);
+  initPagination('drives-tbody',         [0, 1, 2, 3, 4],            25);
+  initPagination('env-tbody',            [0, 1],                     25);
+  initPagination('hotfix-tbody',         [0, 1, 2, 3, 4, 5],         25);
+  initPagination('software-tbody',       [0, 1, 2, 3, 4, 5],         25);
+  initPagination('defender-tbody',       [0, 1, 2, 3, 4, 5, 6, 7],   25);
+  initPagination('procs-tbody',          [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 25);
+  initPagination('startup-tbody',        [0, 1, 2, 3],               25);
+  initPagination('net-tbody',            [0, 1, 2, 3, 4, 5, 6],      25);
+  initPagination('listen-tbody',         [0, 1, 2, 3],               25);
+  initPagination('dns-tbody',            [0, 1, 2, 3, 4],            25);
+  initPagination('ipconfig-tbody',       [0, 1, 2, 3, 4, 5],         25);
+  initPagination('net-ip-tbody',         [0, 1, 2, 3, 4],            25);
+  initPagination('net-profile-tbody',    [0, 1, 2, 3, 4],            25);
+  initPagination('net-adapter-tbody',    [0, 1, 2, 3, 4],            25);
+  initPagination('neighbor-tbody',       [0, 1, 2],                  25);
+  initPagination('wlan-tbody',           [0, 1],                     25);
+  initPagination('shares-tbody',         [0, 1, 2],                  25);
+  initPagination('network-adapter-tbody',[0, 1, 2, 3, 4, 5, 6, 7],   25);
+  initPagination('firewall-tbody',       [0, 1, 2, 3, 4, 5, 6, 7],   25);
+  initPagination('outbound-smb-tbody',   [0, 1, 2, 3, 4, 5, 6],      25);
+  initPagination('smb-sessions-tbody',   [0, 1, 2, 3],               25);
+  initPagination('net-hops-tbody',       [0, 1, 2, 3, 4, 5],         25);
+  initPagination('adapter-hops-tbody',   [0, 1, 2, 3, 4, 5],         25);
+  initPagination('ip-hops-tbody',        [0, 1, 2, 3, 4, 5],         25);
+  initPagination('svc-tbody',            [0, 1, 2, 3, 4],            25);
+  initPagination('tasks-tbody',          [0, 1, 2, 3],               25);
+  initPagination('browser-tbody',        [0, 1, 2, 3],               25);
+  initPagination('usb-tbody',            [0, 1, 2, 3],               25);
+  initPagination('image-tbody',          [0, 1, 2, 3],               25);
+  initPagination('upnp-tbody',           [0, 1, 2, 3],               25);
+  initPagination('unknown-drives-tbody', [0, 1, 2, 3],               25);
+  initPagination('files-tbody',          [0, 1, 2],                  50);
+  initPagination('links-tbody',          [0, 1, 2, 3, 4],            50);
+  initPagination('downloads-tbody',      [0, 1, 2, 3, 4, 5],         50);
+  initPagination('hidden-1-tbody',       [0, 1, 2, 3, 4, 5],         50);
+  initPagination('hidden-2-tbody',       [0, 1, 2, 3, 4, 5],         50);
+  initPagination('hidden-3-tbody',       [0, 1, 2, 3, 4, 5],         50);
+  initPagination('hidden-4-tbody',       [0, 1, 2, 3, 4, 5],         50);
+  initPagination('ps-history-tbody',     [0, 1],                     50);
+  initPagination('bitlocker-tbody',      [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 50);
+  initPagination('extras-tbody',         [0, 1, 3, 4],               25);
+
+  // Sync count badges after pagination (querySelectorAll counts ALL rows, incl. hidden)
+  syncCount('users-tbody',         'users-count');
+  syncCount('admins-tbody',        'admins-count');
+  syncCount('groups-tbody',        'groups-count');
+  syncCount('sessions-tbody',      'sessions-count');
+  syncCount('history-tbody',       'history-count');
+  syncCount('software-tbody',      'software-count');
+  syncCount('defender-tbody',      'defender-count');
+  syncCount('procs-tbody',         'procs-count');
+  syncCount('startup-tbody',       'startup-count');
+  syncCount('net-tbody',           'net-count');
+  syncCount('svc-tbody',           'svc-count');
+  syncCount('tasks-tbody',         'tasks-count');
+  syncCount('browser-tbody',       'browser-count');
+  syncCount('usb-tbody',           'usb-count');
+  syncCount('image-tbody',         'image-count');
+  syncCount('upnp-tbody',          'upnp-count');
+  syncCount('unknown-drives-tbody','unknown-drives-count');
+  syncCount('files-tbody',         'files-count');
+  syncCount('links-tbody',         'links-count');
+  syncCount('downloads-tbody',     'downloads-count');
+  syncCount('hidden-1-tbody',      'hidden-1-count');
+  syncCount('hidden-2-tbody',      'hidden-2-count');
+  syncCount('hidden-3-tbody',      'hidden-3-count');
+  syncCount('hidden-4-tbody',      'hidden-4-count');
+  syncCount('ps-history-tbody',    'ps-history-count');
+  syncCount('bitlocker-tbody',     'bitlocker-count');
+  syncCount('extras-tbody',        'extras-count');
+  syncCount('hash-tbody',          'hash-count');
+  syncCount('ioc-tbody',           'ioc-count');
+  syncNetworkCards();
+
+});
+
+</template>
+</body>
+</html>
+
+
+
+
 
 "@
 }
 
-# Call the function to generate the report
-EvtxUserStyle | Out-File -FilePath $EvtxUserFile
 
-#endregion
+HTMLFiles | Out-File -FilePath $HTMLFiles
 
-#############################################################################################################
-#region   STYLES FOR EVENT LOG ANALYSIS   LOGON EVENTS         #############################################
-#############################################################################################################
+$ReportRuntimeScriptSource = Join-Path $PSScriptRoot 'forensicator-runtime.js'
+$ReportRuntimeScriptTarget = Join-Path "$PSScriptRoot\$env:COMPUTERNAME" 'forensicator-runtime.js'
 
-function LogonEventsStyle {
-
-  @"
-
-  $Style_Head
-  $EVTX_Menu
-
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Logon-Events
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Successful Logon Events $(New-FIIcon -Key "SUCCESSFUL_LOGON_EVENTS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>User</th>
-                  <th>Logon Type</th>
-                  <th>SourceNetworkAddress</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-               $logonEventsFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Failed Logon Events $(New-FIIcon -Key "FAILED_LOGON_EVENTS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>User</th>
-                  <th>Logon Type</th>
-                  <th>SourceNetworkAddress</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-               $logonEventsFailedFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-  $Style_Footer
-
-"@
+if (Test-Path -LiteralPath $ReportRuntimeScriptSource) {
+    Copy-Item -LiteralPath $ReportRuntimeScriptSource -Destination $ReportRuntimeScriptTarget -Force
+} else {
+    Write-ForensicLog "[!] Missing report runtime asset: $ReportRuntimeScriptSource" -Level WARN -Section "CORE"
 }
 
-# Call the function to generate the report
-LogonEventsStyle | Out-File -FilePath $LogonEventsFile
 
-#endregion
-
-
-
-
-#############################################################################################################
-#region   STYLES FOR EVENT LOG ANALYSIS   Object Access         #############################################
-#############################################################################################################
-
-function ObjectEventsStyle {
-
-  @"
-
-  $Style_Head
-  $EVTX_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Object-Access
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Object Access Events $(New-FIIcon -Key "OBJECT_ACCESS_EVENTS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>Event ID</th>
-                  <th>User</th>
-                  <th>Domain</th>
-                  <th>Object Name</th>
-                  <th>Object Type</th>
-                  <th>Access</th>
-                  <th>Process</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ObjectHtmlTable1
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-ObjectEventsStyle | Out-File -FilePath $ObjectEventsFile
-
-#endregion
-
-
-
-#############################################################################################################
-#region   STYLES FOR EVENT LOG ANALYSIS   PROCESS EVENTS        #############################################
-#############################################################################################################
-
-function ProcessEventsStyle {
-
-  @"
-
-  $Style_Head
-  $EVTX_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Process-Events
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-
-
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Process Execution Events $(New-FIIcon -Key "PROCESS_EXECUTION_EVENTS")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr$rowStyle>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>User</th>
-                  <th>Domain</th>
-                  <th>Process</th>
-                  <th>PID</th>
-                  <th>Parent Process</th>
-                  <th>Parent PID</th>
-                  <th>CommandLine</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ObjectHtmlTable2
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-ProcessEventsStyle | Out-File -FilePath $ProcessEventsFile
-
-#endregion
-
-
-#############################################################################################################
-#region   DETECTION CHECKS         ######################################################################
-#############################################################################################################
-
-function DetectionStyle {
-
-  @"
-
-  $Style_Head
-  $Style_Menu
-
-  <div class="mobile-menu-overlay"></div>
-  <div class="main-container">
-    <div class="pd-ltr-20 xs-pd-20-10">
-      <div class="min-height-200px">
-        <div class="page-header">
-          <div class="row">
-            <div class="col-md-6 col-sm-12">
-              <div class="title">
-                <h4>Home</h4>
-              </div>
-              <nav aria-label="breadcrumb" role="navigation">
-                <ol class="breadcrumb">
-                  <li class="breadcrumb-item">
-                    <a href="index.html">Home</a>
-                  </li>
-                  <li class="breadcrumb-item active" aria-current="page">
-                    Detections
-                  </li>
-                </ol>
-              </nav>
-            </div>
-          </div>
-        </div>
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Malicious Hash Check $(New-FIIcon -Key "MALICIOUS_HASH_CHECK")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">File</th>
-                  <th>Extension</th>
-                  <th>Size KB</th>
-                  <th>MD5</th>
-                  <th>SHA256</th>
-                  <th>MD5 Hit</th>
-                  <th>SHA256 Hit</th>
-                  <th>Last Modified (UTC)</th>
-                  <th>Created (UTC)</th>
-                  <th>Owner</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HashMatchFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Ransomware Notes $(New-FIIcon -Key "RANSOMWARE_NOTES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Ransom Note</th>
-                  <th>File Name</th>
-                  <th>Wellknown Ransomware Note Matched</th>
-                  <th>Last Accessed (UTC)</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RansomNoteFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">High Entropy Files $(New-FIIcon -Key "HIGH_ENTROPY_FILES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">High Entropy File</th>
-                  <th>File</th>
-                  <th>Entropy</th>
-                  <th>Last Accessed (UTC)</th>
-                </tr>
-              </thead>
-              <tbody>
-               $HighEntropyFilesFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Ransomware Extension $(New-FIIcon -Key "RANSOMWARE_EXTENSION")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Ransomware Extension</th>
-                  <th>File</th>
-                  <th>Extension</th>
-                  <th>Last Accessed (UTC)</th>
-                </tr>
-              </thead>
-              <tbody>
-               $RansomExtFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Shadow Copy Deletion $(New-FIIcon -Key "SHADOW_COPY_DELETION")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Severity</th>
-                  <th>Method</th>
-                  <th>Details</th>
-                </tr>
-              </thead>
-              <tbody>
-               $ShadowFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-        <!-- Export Datatable start -->
-        <div class="card-box mb-30">
-          <div class="pd-20">
-            <h4 class="text-blue h4">Sigma Rules $(New-FIIcon -Key "SIGMA_RULES")</h4>
-          </div>
-          <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
-              <thead>
-                <tr>
-                  <th class="table-plus datatable-nosort">Time</th>
-                  <th>Rule</th>
-                  <th>Level</th>
-                  <th>MITRE Tags</th>
-                  <th>Event ID</th>
-                  <th>User</th>
-                  <th>Process</th>
-                  <th>CommandLine / ScriptBlock</th>
-                  <th>Rule File</th>
-                </tr>
-              </thead>
-              <tbody>
-               $SigmaFragment
-             </tbody>
-            </table>
-          </div>
-        </div>
-        <!-- Export Datatable End -->
-
-  $Style_Footer
-
-"@
-}
-
-# Call the function to generate the report
-DetectionStyle | Out-File -FilePath $DetectionFile
 
 Write-ForensicLog "[*] Done" -Level SUCCESS -Section "CORE" -Detail "HTML Report generation complete"
 
@@ -9070,7 +9518,7 @@ try{
             }
         }
         catch{
-            Write-Warning "$($File.FullName) could not be archived.`n$($_.Exception.Message)" -Level ERROR -Section "ARCHIVING" -Detail "$($File.FullName) could not be archived. due to error: `n$($_.Exception.Message)"
+            Write-ForensicLog "$($File.FullName) could not be archived.`n$($_.Exception.Message)" -Level ERROR -Section "ARCHIVING" -Detail "$($File.FullName) could not be archived. due to error: `n$($_.Exception.Message)"
         }
     }
 }
@@ -9195,7 +9643,7 @@ Pop-Location
         )
 
         if(-not $FilePath.EndsWith($Suffix)){
-            Write-Warning "$FilePath does not have expected suffix $Suffix" -Level ERROR -Section "DECRYPTION" -Detail "No file with suffix $Suffix found for decryption"
+            Write-ForensicLog "$FilePath does not have expected suffix $Suffix" -Level ERROR -Section "DECRYPTION" -Detail "No file with suffix $Suffix found for decryption"
         }
 
         $outPath  = $FilePath -replace [regex]::Escape($Suffix),''
