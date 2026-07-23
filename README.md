@@ -11,20 +11,8 @@ Built for fast, structured, and actionable forensic investigations.
 
 
 
-```bash
-___________                                .__               __                
-\_   _____/__________   ____   ____   _____|__| ____ _____ _/  |_  ___________ 
- |    __)/  _ \_  __ \_/ __ \ /    \ /  ___/  |/ ___\\__  \\   __\/  _ \_  __ \
- |     \(  <_> )  | \/\  ___/|   |  \\___ \|  \  \___ / __ \|  | (  <_> )  | \/
- \___  / \____/|__|    \___  >___|  /____  >__|\___  >____  /__|  \____/|__|   
-     \/                    \/     \/     \/        \/     \/                    
+<img width="1953" height="805" alt="ChatGPT Image Jul 23, 2026, 09_01_35 PM" src="https://github.com/user-attachments/assets/bddffeb5-0352-4f30-9abd-55f80fbb1298" />
 
-                                                                        v4.1.6
-```
-
-<p align="center">
-<a href="https://forensicator.io"><img width="147" height="36" alt="image" src="https://github.com/user-attachments/assets/824f5c19-9bf4-41a3-bad9-32549fa0d3bc" width="400" ></a>
-</p>
 
 ---
 
@@ -232,16 +220,10 @@ https://mit.com/licenses/mit/
 
 # ☕ Full Usage & WalkThrough
 
-<a href="https://forensicator.io/walkthrough.html">
-  <img width="239" height="31" alt="image" src="https://github.com/user-attachments/assets/f4cb261c-65c8-4592-a42e-6b9ba54dc990" />
+<a href="https://forensicator.io/walkthrough.html"> Usage Guide </a>
 
 </a>
 
 ---
 
-# 🔗 Project Home
 
-<a href="https://forensicator.io">
-  <img width="147" height="36" alt="image" src="https://github.com/user-attachments/assets/824f5c19-9bf4-41a3-bad9-32549fa0d3bc" />
-
-</a>
